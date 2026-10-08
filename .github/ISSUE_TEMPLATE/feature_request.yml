@@ -1,0 +1,42 @@
+name: ✨ 기능 추가
+description: 필요한 기능이나 개선 아이디어를 남겨 주세요.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        작은 개선도 좋아요. 필요한 변화와 완료 기준만 적어 주세요.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 무엇이 필요한가요?
+      description: 원하는 기능과 필요한 이유를 한두 문장으로 적어 주세요.
+      placeholder: 예측 결과를 팀원에게 전달할 수 있도록 CSV 다운로드가 있으면 좋겠어요.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 언제 완료인가요?
+      placeholder: |
+        - 선택한 날짜의 24시간 예측을 CSV로 내려받을 수 있어요.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 관련 영역 (선택)
+      multiple: true
+      options:
+        - data / forecast
+        - optimization
+        - evaluation
+        - pipeline / API / dashboard
+        - schemas / docs
+  - type: textarea
+    id: notes
+    attributes:
+      label: 참고 자료 (선택)
+      description: 관련 링크나 논의할 내용이 있다면 적어 주세요.
+      placeholder: 데이터 컬럼·단위·입출력 형식이 바뀐다면 여기에 적어 주세요.

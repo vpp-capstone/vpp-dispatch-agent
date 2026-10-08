@@ -1,0 +1,41 @@
+name: 🐛 버그
+description: 문제 상황과 재현 방법을 알려 주세요.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        짧게 적어도 괜찮아요. 문제 상황과 재현 방법만 알려 주세요.
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 어떤 문제인가요?
+      placeholder: 날짜를 바꾸면 차트가 비어 있어요. 선택한 날짜의 예측이 보여야 해요.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 어떻게 확인할 수 있나요?
+      placeholder: |
+        1. 대시보드를 실행해요.
+        2. 날짜를 변경해요.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 관련 영역 (선택)
+      options:
+        - data / forecast
+        - optimization
+        - evaluation
+        - pipeline / API / dashboard
+        - schemas / docs
+        - 모르겠음
+  - type: textarea
+    id: logs
+    attributes:
+      label: 참고 자료 (선택)
+      description: 로그·스크린샷·실행 환경이 있다면 첨부해 주세요. API 키 등 민감 정보는 제외해 주세요.
