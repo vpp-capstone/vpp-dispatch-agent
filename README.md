@@ -54,6 +54,11 @@ pytest                                       # PR 전에 한 번
 
 ## 폴더
 
+제주 재생에너지 데이터는 공개 파일 수집 → 과거 파일 정제 → 팀 전달 CSV 생성 순서로 실행한다.
+[재생에너지 팀 전달 문서](docs/renewable_history.md)에 실행 명령·컬럼·결측 정책이 있다.
+초기 단일 연도 점검은 [Target 정제 문서](docs/renewable_targets.md)와
+[품질 보고서](docs/renewable_target_quality_20261010.md)에 보존한다.
+
 ```text
 src/vpp/
   schemas.py        모듈 간 입출력 타입        ← 전원
