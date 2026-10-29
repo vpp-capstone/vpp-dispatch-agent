@@ -58,6 +58,7 @@ pytest                                       # PR 전에 한 번
 src/vpp/
   schemas.py        모듈 간 입출력 타입        ← 전원
   data.py           수집·전처리·로딩           ← 데이터&수요예측
+  market/           시장·수요 원본 수집·정리    ← 데이터&수요예측 (docs/data_contract.md 2번)
   forecast.py       예측·학습                  ← 데이터&수요예측
   optimization.py   ESS 운영계획               ← 최적화
   evaluation.py     예측 오차·운영비용 평가     ← 최적화·대시보드

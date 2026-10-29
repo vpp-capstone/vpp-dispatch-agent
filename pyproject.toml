@@ -13,6 +13,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "pandas>=2.2",
+    "openpyxl>=3.1",
     "streamlit>=1.36",
     "plotly>=5.22",
 ]
