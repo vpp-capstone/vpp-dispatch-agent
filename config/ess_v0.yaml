@@ -1,0 +1,14 @@
+# ESS v0 가정값. 실제 설비 사양이 아니며 민감도·설비 선정은 후속 단계.
+# 단위: 용량 MWh, 출력 MW, SOC 비율(0~1), 열화비 원/MWh(충전+방전 처리량 기준).
+status: assumption_not_equipment_spec
+
+capacity_mwh: 16.0
+charge_power_mw: 4.0
+discharge_power_mw: 4.0
+soc_min: 0.1
+soc_max: 0.9
+soc_initial: 0.5            # 백테스트 기간 첫 시작에만 사용. 이후는 전날 종료 에너지 이월
+charge_efficiency: 0.95
+discharge_efficiency: 0.95
+throughput_cost_krw_per_mwh: 0.0   # 0 = 열화 미반영. 실제 비용이 0이라는 뜻이 아님
+grid_charging_allowed: false       # v0는 계통 충전 금지만 지원
