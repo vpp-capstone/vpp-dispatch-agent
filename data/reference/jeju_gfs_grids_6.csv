@@ -1,0 +1,7 @@
+gfs_grid_id,latitude,longitude,jeju_region,description
+gfs_33.50_126.25,33.50,126.25,northwest,제주 북서부
+gfs_33.50_126.50,33.50,126.50,northcentral,제주 북중부
+gfs_33.50_126.75,33.50,126.75,northeast,제주 북동부
+gfs_33.25_126.25,33.25,126.25,southwest,제주 남서부
+gfs_33.25_126.50,33.25,126.50,southcentral,제주 남중부
+gfs_33.25_126.75,33.25,126.75,southeast,제주 남동부

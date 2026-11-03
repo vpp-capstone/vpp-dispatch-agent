@@ -20,6 +20,9 @@ data/processed/*
 *.h5
 *.pkl
 models/
+artifacts/models/
+artifacts/predictions/
+*.joblib
 
 # Secrets
 .env
