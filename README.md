@@ -59,27 +59,62 @@ pytest                                       # PR 전에 한 번
 초기 단일 연도 점검은 [Target 정제 문서](docs/renewable_targets.md)와
 [품질 보고서](docs/renewable_target_quality_20261010.md)에 보존한다.
 
+수요예측은 기존 `src/vpp/forecast.py`에서 다음 날 24시간을 다룬다. 태양광·풍력
+발전량 예측은 `src/vpp/generation_forecast/`에서 48시간을 다루며, 두 기능은 서로
+다른 입력·출력 계약을 사용한다.
+
 ```text
 src/vpp/
-  schemas.py        모듈 간 입출력 타입        ← 전원
-  data.py           수집·전처리·로딩           ← 데이터&수요예측
-  market/           시장·수요 원본 수집·정리    ← 데이터&수요예측 (docs/data_contract.md 2번)
-  forecast.py       예측·학습                  ← 데이터&수요예측
-  optimization.py   ESS 운영계획               ← 최적화
-  evaluation.py     예측 오차·운영비용 평가     ← 최적화·대시보드
-  pipeline.py       모듈 연결 + CLI            ← 대시보드
-api/main.py         FastAPI                    ← 대시보드
-dashboard/app.py    Streamlit                  ← 대시보드
+  schemas.py                 모듈 간 공통 입출력 타입
+  data.py                    시간별 공통 데이터 전처리·로딩
+  forecast.py                기존 24시간 수요예측 자리
+  generation_forecast/       별도 48시간 태양광·풍력 발전량 예측
+    paths.py                 발전량 파이프라인의 공통 저장 경로
+    weather_quality.py       일별 GFS 6격자·48시간 품질검사
+    dataset.py               발전량 정제 및 GFS 결합 학습마트 생성
+    model.py                 기준 모델·LightGBM 학습 및 평가
+  market/                    수요·SMP·출력제어 원본 수집 및 통합
+  renewable_targets.py       재생에너지 Target 후보 정제
+  build_renewable_history.py 과거 재생에너지 자료 통합
+  portfolio_data.py          최적화용 포트폴리오 입력 구성
+  optimization.py            ESS 운영계획
+  validation.py              ESS 계획 제약 검증
+  evaluation.py              예측 오차·운영비용 평가
+  pipeline.py                모듈 연결 및 CLI
+
+scripts/weather/
+  collect_gfs_dayahead_sample.py  GFS 하루 샘플 수집·검증
+  collect_gfs_history.py          과거 GFS 48시간 예보 수집·재개
+
 data/
-  raw/              수집 원본. 직접 수정 금지. Git 제외
-  processed/        정제된 시간별 데이터. Git 제외
-  sample/           화면 확인용 샘플 CSV
+  reference/                 Git에 포함하는 발전소·GFS 격자 기준정보
+  raw/
+    generation/              발전량 원본 CSV. 직접 수정 금지, Git 제외
+    gfs_history_core/         일별 과거 GFS Parquet·수집 로그, Git 제외
+  processed/
+    generation_forecast/     정제 발전량 및 태양광·풍력 학습마트, Git 제외
+  sample/                    화면·재현 확인용 소형 샘플
+
+artifacts/
+  models/                    학습 모델 파일, Git 제외
+  predictions/               검증·테스트 예측 결과, Git 제외
+
+config/
+  ess_v0.yaml                ESS 기본 사양·비용 설정
+
 docs/
-  data_contract.md  데이터 소스·전달 형식      ← 데이터팀 작성
-  formulation.md    ESS 제약·비용 정의         ← 최적화팀 작성
-  research_direction.md  참고 논문·방향
-tests/              기능 만들면서 각자 추가
-.github/            이슈·PR 템플릿, PR마다 pytest 도는 CI
+  data_contract.md           데이터 소스·시간·단위·전달 형식
+  formulation.md             ESS 제약·비용 정의
+  generation_asset_validation.md  발전소 21개소 데이터 점검 결과
+  generation_forecast_design(11-03).md  발전량 예측 설계
+  GITHUB_REPO_HANDOFF.md      발전량 예측 코드 이전 인수인계
+  results/                   모델 학습 시 지표·특성 중요도 생성
+
+api/main.py                  FastAPI 진입점
+dashboard/app.py             Streamlit 대시보드
+tests/                       모듈별 단위·통합 테스트
+.github/                     이슈·PR 템플릿 및 pytest CI
+pyproject.toml               패키지·의존성·pytest·ruff 설정
 ```
 
 ## 규칙

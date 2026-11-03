@@ -1,0 +1,22 @@
+asset_id,plant_name,energy_type,capacity_mw,embedded_weather_group,address,latitude,longitude,coordinate_method,coordinate_quality,gfs_grid_latitude,gfs_grid_longitude,gfs_grid_id
+solar_geumak,금악태양광,solar,0.98631,서부,제주특별자치도 제주시 한림읍 금악리,33.3599820,126.3017587,nominatim_locality_match,locality_centroid,33.25,126.25,gfs_33.25_126.25
+solar_geumoreum,금오름태양광,solar,0.42822,서부,제주특별자치도 제주시 한림읍,33.3934400,126.2668400,nominatim_admin_match,locality_centroid,33.50,126.25,gfs_33.50_126.25
+solar_namwon,남원태양광,solar,0.70902,남부,제주특별자치도 서귀포시 남원읍,33.3076683,126.6907475,nominatim_admin_match,locality_centroid,33.25,126.75,gfs_33.25_126.75
+solar_mirinae,미리내태양광,solar,0.93825,남부,제주특별자치도 서귀포시 남원읍,33.3076683,126.6907475,nominatim_admin_match,locality_centroid,33.25,126.75,gfs_33.25_126.75
+solar_bongseong,봉성태양광,solar,0.65910,서부,제주특별자치도 제주시 애월읍,33.4507900,126.3752000,nominatim_admin_match,locality_centroid,33.50,126.50,gfs_33.50_126.50
+solar_seongeup,성읍태양광,solar,0.96174,동부,제주특별자치도 서귀포시 표선면 성읍리,33.4037300,126.7854000,nominatim_locality_match,locality_centroid,33.50,126.75,gfs_33.50_126.75
+solar_sumang,수망태양광,solar,0.99900,남부,제주특별자치도 서귀포시 남원읍,33.3076683,126.6907475,nominatim_admin_match,locality_centroid,33.25,126.75,gfs_33.25_126.75
+solar_aewol,애월태양광,solar,0.64974,서부,제주특별자치도 제주시 애월읍,33.4507900,126.3752000,nominatim_admin_match,locality_centroid,33.50,126.50,gfs_33.50_126.50
+solar_oreumjeju,오름제주태양광,solar,0.53898,동부,제주특별자치도 서귀포시 표선면 가시리,33.3818948,126.7328983,nominatim_locality_match,locality_centroid,33.50,126.75,gfs_33.50_126.75
+solar_uribyeol,우리별태양광,solar,0.87750,동부,제주특별자치도 서귀포시 표선면 성읍리,33.4037300,126.7854000,nominatim_locality_match,locality_centroid,33.50,126.75,gfs_33.50_126.75
+solar_uri,우리태양광,solar,0.74919,서부,제주특별자치도 제주시 애월읍,33.4507900,126.3752000,nominatim_admin_match,locality_centroid,33.50,126.50,gfs_33.50_126.50
+solar_wolpyeong,월평태양광,solar,0.55350,남부,제주특별자치도 제주시 월평동,33.4649800,126.5773300,nominatim_admin_match,locality_centroid,33.50,126.50,gfs_33.50_126.50
+solar_jejutop,제주탑태양광,solar,0.80325,서부,제주특별자치도 서귀포시 대정읍,33.2330247,126.2495988,nominatim_admin_match,locality_centroid,33.25,126.25,gfs_33.25_126.25
+solar_kone,케이원태양광,solar,0.89427,남부,제주특별자치도 서귀포시 남원읍,33.3076683,126.6907475,nominatim_admin_match,locality_centroid,33.25,126.75,gfs_33.25_126.75
+solar_tamra,탐라태양광,solar,0.72306,동부,제주특별자치도 서귀포시 표선면 가시리,33.3818948,126.7328983,nominatim_locality_match,locality_centroid,33.50,126.75,gfs_33.50_126.75
+solar_pyeongdae,평대태양광,solar,0.69525,동부,제주특별자치도 제주시 구좌읍,33.5166200,126.8105500,nominatim_admin_match,locality_centroid,33.50,126.75,gfs_33.50_126.75
+solar_pyoseon,표선태양광,solar,0.91800,동부,제주특별자치도 서귀포시 표선면,33.3504543,126.7940490,nominatim_admin_match,locality_centroid,33.25,126.75,gfs_33.25_126.75
+solar_handong,한동태양광,solar,0.99684,동부,제주특별자치도 제주시 구좌읍,33.5166200,126.8105500,nominatim_admin_match,locality_centroid,33.50,126.75,gfs_33.50_126.75
+wind_hangyeong,한경풍력,wind,21.00000,서부,제주특별자치도 제주시 한경면 신창리·용수리,33.3248500,126.1944200,existing_project_proxy,representative_point,33.25,126.25,gfs_33.25_126.25
+wind_sangmyeong,상명풍력,wind,21.00000,서부,제주특별자치도 제주시 한림읍 금악리,33.3599820,126.3017587,existing_project_proxy,locality_centroid,33.25,126.25,gfs_33.25_126.25
+wind_seongsan,성산풍력,wind,20.00000,동부,제주특별자치도 서귀포시 성산읍 수산리,33.4430500,126.8647800,existing_project_proxy,representative_point,33.50,126.75,gfs_33.50_126.75
