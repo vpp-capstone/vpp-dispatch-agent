@@ -18,6 +18,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from vpp.forecast_rolling import soc_trace
 from vpp.optimization import EssParams, solve_window
 from vpp.validation import check_plan, check_properties
 
@@ -97,8 +98,14 @@ def ess_from_validation(validation: dict[str, Any]) -> EssParams:
     return EssParams(**{k: v for k, v in validation["assumptions"].items() if k in names})
 
 
+def run_stamp(folder: Path) -> float:
+    """같은 실행ID 로 다시 돌리면 파일이 바뀌므로 캐시 키에 수정시각을 넣는다."""
+    files = [p for p in folder.iterdir() if p.is_file()]
+    return max((p.stat().st_mtime for p in files), default=0.0)
+
+
 @st.cache_data(show_spinner=False)
-def load_run(folder_str: str) -> dict[str, Any]:
+def load_run(folder_str: str, stamp: float = 0.0) -> dict[str, Any]:
     folder = Path(folder_str)
     hourly = _read_ts_csv(folder / "hourly_plan.csv")
     hourly["date"] = hourly["ts"].dt.date
@@ -279,11 +286,13 @@ def checks_table(checks: list[dict[str, Any]]) -> pd.DataFrame:
 def timeline_figure(plan: pd.DataFrame, ess: EssParams, title_suffix: str = "") -> go.Figure:
     x = plan["ts"]
     dt = plan["dt_hours"]
-    pv = plan["pv_kwh"] / 1000 / dt if "pv_kwh" in plan else plan["generation_mwh"] / dt
-    wind = plan["wind_kwh"] / 1000 / dt if "wind_kwh" in plan else 0 * pv
     fig = go.Figure()
-    fig.add_bar(x=x, y=pv, name="태양광", marker_color=COLORS["pv"])
-    fig.add_bar(x=x, y=wind, name="풍력", marker_color=COLORS["wind"])
+    if "pv_kwh" in plan and "wind_kwh" in plan:
+        fig.add_bar(x=x, y=plan["pv_kwh"] / 1000 / dt, name="태양광", marker_color=COLORS["pv"])
+        fig.add_bar(x=x, y=plan["wind_kwh"] / 1000 / dt, name="풍력", marker_color=COLORS["wind"])
+    else:  # 발전원 구분이 없는 포트폴리오 합계 (예측 비교 실행)
+        fig.add_bar(x=x, y=plan["generation_mwh"] / dt, name="전체 발전량 (태양광+풍력)",
+                    marker_color=COLORS["pv"])
     fig.add_bar(x=x, y=plan["discharge_mwh"] / dt, name="ESS 방전", marker_color=COLORS["ess"])
     fig.add_bar(x=x, y=-plan["charge_mwh"] / dt, name="ESS 충전",
                 marker_color=COLORS["ess_light"])
@@ -395,7 +404,8 @@ def action_card(a: dict[str, Any], selected: bool) -> str:
     )
 
 
-def header(run: dict[str, Any] | None, day) -> None:
+def header(run: dict[str, Any] | None, day,
+           badge: str = "완전예측 백테스트 · 실제 입찰 아님") -> None:
     right = ""
     if run is not None:
         s = run["summary"]
@@ -404,7 +414,7 @@ def header(run: dict[str, Any] | None, day) -> None:
     st.markdown(
         '<div class="jf-header"><div class="jf-logo">J</div>'
         '<span class="jf-title">JEJU FLOW</span><span class="jf-sub">제주 VPP 중개사업자용</span>'
-        '<span class="jf-badge">완전예측 백테스트 · 실제 입찰 아님</span>'
+        f'<span class="jf-badge">{badge}</span>'
         f'<span class="jf-right">{right}</span></div>',
         unsafe_allow_html=True,
     )
@@ -792,6 +802,201 @@ def render_validation_tab(run: dict[str, Any], day) -> None:
             st.markdown(f"- {line}")
 
 
+# =============================== 예측 vs 완전예측 비교 (forecast_backtest) ==================
+
+FORECAST_MODE = "forecast_vs_perfect_foresight_plan"
+
+
+def run_mode(folder: Path) -> str:
+    try:
+        return json.loads((folder / "summary.json").read_text(encoding="utf-8")).get("mode", "")
+    except Exception:
+        return ""
+
+
+@st.cache_data(show_spinner=False)
+def load_forecast_run(folder_str: str, stamp: float = 0.0) -> dict[str, Any]:
+    folder = Path(folder_str)
+    run: dict[str, Any] = {
+        "folder": folder,
+        "summary": json.loads((folder / "summary.json").read_text(encoding="utf-8")),
+        "validation": json.loads((folder / "validation.json").read_text(encoding="utf-8")),
+        "daily": pd.read_csv(folder / "daily_comparison.csv", parse_dates=["planning_day"]),
+        "excluded": pd.read_csv(folder / "excluded_days.csv"),
+    }
+    for name in ("forecast", "actual"):
+        frame = _read_ts_csv(folder / f"hourly_{name}.csv")
+        frame["date"] = frame["ts"].dt.date
+        run[name] = frame
+    names = {f.name for f in fields(EssParams)}
+    run["ess"] = EssParams(**{k: v for k, v in run["summary"]["ess"].items() if k in names})
+    return run
+
+
+def soc_compare_figure(forecast: pd.DataFrame, actual: pd.DataFrame,
+                       initials: dict[str, dict[int, float]], ess: EssParams,
+                       title: str) -> go.Figure:
+    """시작 잔량은 구간 첫 시각에, 종료 잔량은 각 시간의 끝(ts+dt)에 놓는다 (soc_trace)."""
+    fig = go.Figure()
+    for key, name, frame, color in (("forecast", "예측 기반", forecast, COLORS["ess"]),
+                                    ("actual", "완전예측(실측)", actual, COLORS["accent"])):
+        trace = soc_trace(frame, initials[key])
+        fig.add_scatter(x=trace["ts"], y=trace["energy_mwh"], name=name, mode="lines+markers",
+                        line=dict(color=color, width=2), marker=dict(size=5))
+        starts = trace[trace["point"] == "start"]
+        fig.add_scatter(x=starts["ts"], y=starts["energy_mwh"], name=f"{name} · 시작 잔량",
+                        mode="markers", marker=dict(color=color, size=11, symbol="diamond"),
+                        showlegend=False)
+    for level, label in ((ess.energy_max_mwh, "상한"), (ess.energy_min_mwh, "하한")):
+        fig.add_hline(y=level, line_dash="dot", line_color="gray",
+                      annotation_text=f"{label} {level:.1f} MWh")
+    fig.update_layout(height=320, margin=dict(t=40, b=30, l=10, r=10), plot_bgcolor="#fff",
+                      title=dict(text=title, font=dict(size=15)),
+                      yaxis=dict(title="MWh", range=[0, ess.capacity_mwh * 1.08]),
+                      legend=dict(orientation="h", y=1.12, x=0))
+    fig.update_yaxes(gridcolor="#F3F4F6")
+    return fig
+
+
+def daily_compare_figure(daily: pd.DataFrame) -> go.Figure:
+    x = daily["planning_day"]  # 날짜형 그대로 (문자열로 바꾸면 plotly 가 다른 해로 해석할 수 있다)
+    fig = go.Figure()
+    fig.add_bar(x=x, y=daily["objective_krw_forecast"] / MAN, name="예측 기반 계획 수익",
+                marker_color=COLORS["ess"])
+    fig.add_bar(x=x, y=daily["objective_krw_actual"] / MAN, name="완전예측 계획 수익",
+                marker_color=COLORS["accent"])
+    fig.add_scatter(x=x, y=daily["charge_mwh_forecast"], name="충전 MWh (예측)", yaxis="y2",
+                    mode="lines+markers", line=dict(color=COLORS["ess_light"], dash="dot"))
+    fig.add_scatter(x=x, y=daily["charge_mwh_actual"], name="충전 MWh (실측)", yaxis="y2",
+                    mode="lines+markers", line=dict(color="#99F6E4", dash="dot"))
+    fig.update_layout(barmode="group", height=340, margin=dict(t=40, b=30, l=10, r=10),
+                      plot_bgcolor="#fff",
+                      title=dict(text="계획일별 계획 수익과 충전량", font=dict(size=15)),
+                      xaxis=dict(type="date", tickformat="%Y-%m-%d", dtick=86_400_000),
+                      yaxis=dict(title="만 원"),
+                      yaxis2=dict(title="MWh", overlaying="y", side="right", showgrid=False),
+                      legend=dict(orientation="h", y=1.12, x=0))
+    fig.update_yaxes(gridcolor="#F3F4F6")
+    return fig
+
+
+def render_forecast_run(run: dict[str, Any], day) -> None:
+    s, v, ess = run["summary"], run["validation"], run["ess"]
+    tf, ta = s["scenarios"]["forecast"], s["scenarios"]["actual"]
+    compare = v.get("comparison_checks", [])
+    plan_ok = v.get("plan_checks_all_passed", False)
+    cmp_ok = v.get("comparison_all_passed", False)
+    diff = s["planned_objective_diff_krw"]
+
+    st.markdown(f'<span class="jf-tag">계획일 {s["days"]}일 · 제외 {s["excluded_days"]}일 · '
+                f'{s["start"]} ~ {s["end"]}</span>', unsafe_allow_html=True)
+    st.markdown('<div class="jf-h1">예측 기반 계획과 완전예측 계획을 같은 조건으로 '
+                '비교합니다</div>', unsafe_allow_html=True)
+    st.markdown('<div class="jf-lead">같은 계획일 D 의 발전량 예측(D-2 18 UTC)과 '
+                'SMP 예측(D-1 11시) 48시간을 넣어 앞 24시간만 확정하고 계획상 SOC 를 '
+                '이월했습니다. 수익은 예측이 맞았다고 가정한 <b>계획 수익</b>이며 실제 손익이 '
+                '아닙니다. 실측 적용·정산은 다음 단계.</div>', unsafe_allow_html=True)
+    man = unit("만 원")
+    n_pass = sum(chk["passed"] for chk in compare)
+    all_ok = cmp_ok and plan_ok
+    cards = [
+        kpi("예측 기반 계획 수익", f"{tf['planned_objective_krw'] / MAN:,.0f}{man}",
+            f"판매 {tf['sell_mwh']:,.0f} MWh", "flat", "🔮", "#F5F3FF"),
+        kpi("완전예측 계획 수익", f"{ta['planned_objective_krw'] / MAN:,.0f}{man}",
+            f"판매 {ta['sell_mwh']:,.0f} MWh", "flat", "🎯"),
+        kpi("계획 수익 차이", f"{diff / MAN:+,.0f}{man}", "실제 손익 아님",
+            "up" if diff >= 0 else "down", "Δ", "#FFF7ED"),
+        kpi("비교 조건·검산", f"{n_pass} / {len(compare)}",
+            "제약 검산 " + ("통과" if plan_ok else "실패"), "up" if all_ok else "down",
+            "✅" if all_ok else "❌", "#ECFDF5" if all_ok else "#FEF2F2"),
+    ]
+    for col, card in zip(st.columns(4), cards, strict=True):
+        col.markdown(card, unsafe_allow_html=True)
+    if not cmp_ok:
+        bad = ", ".join(chk["item"] for chk in compare if not chk["passed"])
+        st.error(f"두 시나리오의 비교 조건이 일치하지 않습니다: {bad}")
+    if not plan_ok:
+        st.error("확정 계획의 제약 검산(check_plan)에 실패한 시나리오·구간이 있습니다.")
+    for w in v.get("comparison_warnings", []):
+        if w.get("flagged"):
+            st.warning(f"확인 필요 · {w['item']}: {w['note']}")
+
+    seg_initials = {
+        key: {seg["segment_id"]: seg["initial_energy_mwh"]
+              for seg in s["scenarios"][key]["segments"]}
+        for key in ("forecast", "actual")
+    }
+    st.plotly_chart(soc_compare_figure(run["forecast"], run["actual"], seg_initials, ess,
+                                       "ESS 잔량(SOC) 이월 비교 · 기간 전체 "
+                                       "(◆ 구간 시작 잔량, ● 각 시간 종료 잔량)"),
+                    width="stretch")
+    st.plotly_chart(daily_compare_figure(run["daily"]), width="stretch")
+
+    daily = run["daily"]
+    row = daily[daily["planning_day"].dt.date == day].iloc[0]
+    reset = bool(row["segment_start_forecast"])
+    st.markdown(f"#### 이 날의 계획 · {day:%Y-%m-%d}"
+                + (" · 구간 시작 (설정값 SOC 로 초기화)" if reset else " · 전날 종료 잔량 이월"))
+    f_day = run["forecast"][run["forecast"]["date"] == day]
+    a_day = run["actual"][run["actual"]["date"] == day]
+    m = st.columns(4)
+    m[0].metric("시작 잔량 (예측 기반)", f"{row['initial_energy_mwh_forecast']:.2f} MWh",
+                None if reset else f"전날 종료 대비 {row['carry_gap_mwh_forecast']:+.3f}")
+    m[1].metric("종료 잔량 (예측 기반)", f"{row['final_energy_mwh_forecast']:.2f} MWh")
+    m[2].metric("시작 잔량 (완전예측)", f"{row['initial_energy_mwh_actual']:.2f} MWh",
+                None if reset else f"전날 종료 대비 {row['carry_gap_mwh_actual']:+.3f}")
+    m[3].metric("종료 잔량 (완전예측)", f"{row['final_energy_mwh_actual']:.2f} MWh")
+    g1, g2 = st.columns(2)
+    with g1:
+        st.plotly_chart(timeline_figure(f_day, ess, " · 예측 기반"), width="stretch")
+    with g2:
+        st.plotly_chart(timeline_figure(a_day, ess, " · 완전예측(실측)"), width="stretch")
+    day_initials = {
+        "forecast": {int(f_day["segment_id"].iloc[0]): float(row["initial_energy_mwh_forecast"])},
+        "actual": {int(a_day["segment_id"].iloc[0]): float(row["initial_energy_mwh_actual"])},
+    }
+    st.plotly_chart(soc_compare_figure(f_day, a_day, day_initials, ess,
+                                       "이 날 SOC · ◆ 시작 잔량, ● 각 시간 종료 잔량"),
+                    width="stretch")
+
+    t1, t2 = st.columns([1.4, 1])
+    with t1:
+        st.markdown("#### 계획일별 비교 (잔량 MWh · 수익 원)")
+        table = pd.DataFrame({
+            "계획일": daily["planning_day"].dt.date,
+            "구간": daily["segment_id_forecast"],
+            "구간 시작(초기화)": daily["segment_start_forecast"].map({True: "◆ 초기화", False: ""}),
+            "시작 잔량(예측)": daily["initial_energy_mwh_forecast"],
+            "종료 잔량(예측)": daily["final_energy_mwh_forecast"],
+            "전날 종료 대비(예측)": daily["carry_gap_mwh_forecast"],
+            "시작 잔량(실측)": daily["initial_energy_mwh_actual"],
+            "종료 잔량(실측)": daily["final_energy_mwh_actual"],
+            "전날 종료 대비(실측)": daily["carry_gap_mwh_actual"],
+            "계획 수익(예측)": daily["objective_krw_forecast"],
+            "계획 수익(실측)": daily["objective_krw_actual"],
+            "수익 차이": daily["planned_objective_diff_krw"],
+            "충전(예측)": daily["charge_mwh_forecast"], "충전(실측)": daily["charge_mwh_actual"],
+            "방전(예측)": daily["discharge_mwh_forecast"],
+            "방전(실측)": daily["discharge_mwh_actual"],
+        })
+        st.dataframe(table.round(2), width="stretch", hide_index=True)
+        st.caption("'전날 종료 대비'가 0 이면 계획상 SOC 가 그대로 이월된 것. 구간 첫날은 설정값 "
+                   "SOC 로 초기화되어 비어 있다.")
+        if len(run["excluded"]):
+            st.markdown("#### 제외한 계획일")
+            st.dataframe(run["excluded"], width="stretch", hide_index=True)
+    with t2:
+        st.markdown("#### 비교 조건 검사")
+        st.dataframe(checks_table(compare), width="stretch", hide_index=True)
+        st.markdown("#### 제약 검산 (시나리오·구간별)")
+        rows = [{"scenario": p["scenario"], "segment": p["segment_id"],
+                 "결과": "✅" if p["all_passed"] else "❌"} for p in v.get("plan_checks", [])]
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        st.markdown("#### 한계")
+        for line in s.get("limitations", []):
+            st.markdown(f"- {line}")
+
+
 def render_no_results() -> None:
     st.info(
         "백테스트 결과 폴더가 없습니다. 원본 CSV 4개가 있는 폴더를 지정해 먼저 실행하세요:\n\n"
@@ -817,8 +1022,20 @@ def main() -> None:
     top = st.columns([2, 1.2, 4])
     choice = top[0].selectbox("백테스트 결과", runs, format_func=lambda p: p.name,
                               key="run_folder")
+    if run_mode(choice) == FORECAST_MODE:
+        try:
+            run = load_forecast_run(str(choice), run_stamp(choice))
+        except Exception as exc:  # 깨진 결과 폴더가 있어도 화면은 떠야 한다
+            header(None, None)
+            st.error(f"결과 폴더를 읽지 못했습니다: {exc}")
+            return
+        days = sorted(run["forecast"]["date"].unique())
+        day = top[1].selectbox("날짜", days, index=0, key="day_forecast")
+        header(run, day, badge="예측 vs 완전예측 계획 비교 · 실제 손익 아님")
+        render_forecast_run(run, day)
+        return
     try:
-        run = load_run(str(choice))
+        run = load_run(str(choice), run_stamp(choice))
     except Exception as exc:  # 깨진 결과 폴더가 있어도 화면은 떠야 한다
         header(None, None)
         st.error(f"결과 폴더를 읽지 못했습니다: {exc}")

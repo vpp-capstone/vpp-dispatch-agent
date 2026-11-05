@@ -100,6 +100,32 @@ def test_committed_plan_passes_constraint_checks():
     assert all(c["passed"] for c in seg.result.checks)
 
 
+def test_soc_trace_puts_start_and_end_energy_at_true_times():
+    seg = fr.run_segment([make_window(d) for d in DAYS[:2]], ESS, "forecast")
+    hourly = seg.result.hourly.assign(segment_id=0)
+    trace = fr.soc_trace(hourly, {0: seg.result.period_initial_energy_mwh})
+    start = trace[trace["point"] == "start"].iloc[0]
+    assert start["ts"] == hourly["ts"].iloc[0]
+    assert start["energy_mwh"] == pytest.approx(ESS.initial_energy_mwh)
+    ends = trace[trace["point"] == "end"]
+    assert len(ends) == 48
+    assert ends["ts"].iloc[0] == hourly["ts"].iloc[0] + pd.Timedelta(hours=1)
+    assert np.allclose(ends["energy_mwh"], hourly["energy_end_mwh"])
+    assert trace["point"].iloc[-1] == "gap" and np.isnan(trace["energy_mwh"].iloc[-1])
+
+
+def test_compare_daily_marks_segment_start_and_carry_gap():
+    days = [date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 4)]
+    windows = [make_window(d) for d in days]
+    table = fr.compare_daily(fr.run_scenario(windows, ESS, "forecast"),
+                             fr.run_scenario(windows, ESS, "actual"))
+    assert table["segment_start_forecast"].tolist() == [True, False, True]
+    assert table["segment_id_forecast"].tolist() == [0, 0, 1]
+    assert pd.isna(table["carry_gap_mwh_forecast"].iloc[0])
+    assert table["carry_gap_mwh_forecast"].iloc[1] == pytest.approx(0.0, abs=1e-9)
+    assert pd.isna(table["carry_gap_mwh_actual"].iloc[2])
+
+
 def test_compare_daily_joins_on_planning_day():
     windows = [make_window(d) for d in DAYS]
     table = fr.compare_daily(

@@ -169,6 +169,26 @@ def run_scenario(
     ]
 
 
+def soc_trace(hourly: pd.DataFrame, segment_initial_mwh: dict[int, float]) -> pd.DataFrame:
+    """SOC 그래프용 점 목록. 구간 첫 시각에 시작 잔량, 각 시간의 끝(ts+dt)에 종료 잔량을 놓는다.
+
+    hourly 는 ts, dt_hours, energy_end_mwh, segment_id 를 가진 확정 계획. 구간 사이에는 선이
+    이어지지 않도록 빈 점(NaN)을 넣는다.
+    """
+    parts: list[pd.DataFrame] = []
+    for seg, group in hourly.groupby("segment_id", sort=True):
+        group = group.sort_values("ts")
+        ts_end = group["ts"] + pd.to_timedelta(group["dt_hours"], unit="h")
+        parts.append(pd.DataFrame({
+            "ts": [group["ts"].iloc[0], *ts_end.tolist(), ts_end.iloc[-1]],
+            "energy_mwh": [segment_initial_mwh[int(seg)], *group["energy_end_mwh"].tolist(),
+                           float("nan")],
+            "segment_id": int(seg),
+            "point": ["start", *(["end"] * len(group)), "gap"],
+        }))
+    return pd.concat(parts, ignore_index=True)
+
+
 def compare_daily(forecast: list[SegmentResult], actual: list[SegmentResult]) -> pd.DataFrame:
     """두 시나리오의 계획일별 요약을 나란히 놓는다.
 
@@ -176,10 +196,15 @@ def compare_daily(forecast: list[SegmentResult], actual: list[SegmentResult]) ->
     """
     def stack(results: list[SegmentResult], suffix: str) -> pd.DataFrame:
         parts = [r.result.daily.assign(segment_id=r.segment_id) for r in results]
-        cols = ["planning_day", "segment_id", "initial_energy_mwh", "final_energy_mwh",
-                "objective_krw", "generation_mwh", "sell_mwh", "charge_mwh", "discharge_mwh",
-                "curtailment_mwh"]
-        out = pd.concat(parts, ignore_index=True)[cols]
+        daily = pd.concat(parts, ignore_index=True).sort_values("planning_day")
+        # 이월 확인: 오늘 시작 − 전날 종료 (같은 구간 안에서만). 구간 첫날은 설정값으로 초기화.
+        prev_final = daily.groupby("segment_id")["final_energy_mwh"].shift(1)
+        daily["segment_start"] = prev_final.isna()
+        daily["carry_gap_mwh"] = daily["initial_energy_mwh"] - prev_final
+        cols = ["planning_day", "segment_id", "segment_start", "initial_energy_mwh",
+                "final_energy_mwh", "carry_gap_mwh", "objective_krw", "generation_mwh",
+                "sell_mwh", "charge_mwh", "discharge_mwh", "curtailment_mwh"]
+        out = daily[cols]
         return out.rename(columns={c: f"{c}_{suffix}" for c in cols if c != "planning_day"})
 
     merged = stack(forecast, "forecast").merge(
