@@ -45,6 +45,8 @@ def summarize_backtest(
     summary: dict[str, Any] = {
         "mode": "perfect_foresight_backtest_not_live_bidding",
         "policy": plan.policy,
+        "degradation_model": ess.degradation_model,
+        "throughput_basis": ess.throughput_basis,
         "days": days,
         "hours": int(len(hourly)),
         "sales_revenue_krw": plan.sales_revenue_krw,

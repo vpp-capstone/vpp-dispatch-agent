@@ -20,6 +20,7 @@ import pandas as pd
 import yaml
 from scipy.optimize import Bounds, LinearConstraint, milp
 
+from vpp.degradation import build_degradation_model
 from vpp.schemas import OptimizationRequest, OptimizationResult
 from vpp.validation import check_plan
 
@@ -40,6 +41,8 @@ class EssParams:
     charge_efficiency: float
     discharge_efficiency: float
     throughput_cost_krw_per_mwh: float = 0.0
+    degradation_model: str = "fixed_throughput"
+    throughput_basis: str = "charge_plus_discharge"
     grid_charging_allowed: bool = False
     status: str = "assumption_not_equipment_spec"
 
@@ -68,6 +71,9 @@ class EssParams:
         )
         if not ok:
             raise ValueError("ESS 용량/출력/SOC/효율/비용 범위를 확인하세요.")
+        build_degradation_model(
+            self.degradation_model, self.throughput_cost_krw_per_mwh, self.throughput_basis
+        )
         if self.grid_charging_allowed:
             raise ValueError("v0는 계통 충전 금지만 지원합니다 (grid_charging_allowed=false).")
 
@@ -226,7 +232,11 @@ def solve_window(
         raise ValueError("종료 에너지 하한이 상한보다 큽니다.")
 
     cap_c, cap_d = ess.charge_power_mw * dt, ess.discharge_power_mw * dt
-    ec, ed, wear = ess.charge_efficiency, ess.discharge_efficiency, ess.throughput_cost_krw_per_mwh
+    ec, ed = ess.charge_efficiency, ess.discharge_efficiency
+    degradation = build_degradation_model(
+        ess.degradation_model, ess.throughput_cost_krw_per_mwh, ess.throughput_basis
+    )
+    charge_wear, discharge_wear = degradation.milp_coefficients(n)
 
     # 변수 블록: 판매 q, 충전 c, 방전 d, 감축 r, 구간 끝 에너지 e, 충전 모드 z∈{0,1}.
     q, c, d, r, e, z = (np.arange(n) + k * n for k in range(6))
@@ -239,7 +249,7 @@ def solve_window(
     if export_cap is not None:
         upper[q] = export_cap
     objective = np.zeros(6 * n)
-    objective[q], objective[c], objective[d] = -price, wear, wear  # milp는 최소화
+    objective[q], objective[c], objective[d] = -price, charge_wear, discharge_wear  # milp는 최소화
     integrality = np.zeros(6 * n, dtype=int)
     integrality[z] = 1
 
@@ -273,7 +283,7 @@ def solve_window(
     x = result.x
     sell, charge, discharge, curtailed, energy = (x[idx] for idx in (q, c, d, r, e))
     sales = float(price @ sell)
-    wear_cost = float(wear * (charge.sum() + discharge.sum()))
+    wear_cost = degradation.cost_for_arrays(charge, discharge)
     window = WindowResult(
         sell_mwh=sell,
         charge_mwh=charge,
@@ -358,6 +368,9 @@ def run_rolling(
     dt = data["dt_hours"].to_numpy()
     elapsed = np.cumsum(dt) - dt  # 각 구간의 시작 시각(기간 시작 기준, h)
     total_hours = float(dt.sum())
+    degradation = build_degradation_model(
+        ess.degradation_model, ess.throughput_cost_krw_per_mwh, ess.throughput_basis
+    )
 
     period_start_energy = ess.initial_energy_mwh
     start = period_start_energy
@@ -404,8 +417,7 @@ def run_rolling(
         price_c = committed["price_krw_per_mwh"].to_numpy()
         gen_c = committed["generation_mwh"].to_numpy()
         sales = float(price_c @ window.sell_mwh[sl])
-        throughput = window.charge_mwh[sl].sum() + window.discharge_mwh[sl].sum()
-        wear_cost = float(ess.throughput_cost_krw_per_mwh * throughput)
+        wear_cost = degradation.cost_for_arrays(window.charge_mwh[sl], window.discharge_mwh[sl])
         final_energy = ess.clip_energy(window.energy_end_mwh[n_commit - 1])
         daily_rows.append(
             {

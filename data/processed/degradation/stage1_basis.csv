@@ -1,0 +1,10 @@
+source,parameter,value,unit,scope,assumption_or_observation,source_url
+PNNL-33283 LFP installed cost table,chemistry,LFP,,scenario,공개자료 기반 시나리오 proxy,https://www.pnnl.gov/sites/default/files/media/file/ESGC%20Cost%20Performance%20Report%202022%20PNNL-33283.pdf
+PNNL-33283 LFP 1MW 4-hour 2021,dc_storage_block_cost,182.27,USD/kWh,LFP 1MW 4-hour,전체 EPC나 실제 교체비가 아닌 DC storage block 비용 proxy,https://www.pnnl.gov/sites/default/files/media/file/ESGC%20Cost%20Performance%20Report%202022%20PNNL-33283.pdf
+PNNL-33283 Table 4.3,reference_dod,0.80,fraction,LFP,cycle life 표의 기준 DoD,https://www.pnnl.gov/sites/default/files/media/file/ESGC%20Cost%20Performance%20Report%202022%20PNNL-33283.pdf
+PNNL-33283 Table 4.3,reference_cycle_life,2400,cycles,LFP 80% average DOD,해당 기준의 공개 수명값,https://www.pnnl.gov/sites/default/files/media/file/ESGC%20Cost%20Performance%20Report%202022%20PNNL-33283.pdf
+PNNL-33283 Table 4.3,calendar_life,16,years,LFP,1단계 모델에서는 사용하지 않음,https://www.pnnl.gov/sites/default/files/media/file/ESGC%20Cost%20Performance%20Report%202022%20PNNL-33283.pdf
+v0 config,capacity_mwh,16.0,MWh,local model,실제 설비 사양이 아닌 v0 가정값,
+dated FX conversion,fx_krw_per_usd,1350.36,KRW/USD,2026-11-03,원가 환산용이며 배터리 근거가 아님,https://fxfeed.io/currencies/pairs/usd-krw
+derived,replacement_cost_proxy,3938081875.20,KRW,16MWh LFP scenario,182.27*1350.36*16000 kWh,
+derived,throughput_cost,64096.38,KRW/MWh,stage1,교체비 proxy/(2*cycle life*capacity*DoD),
