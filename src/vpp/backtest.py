@@ -145,7 +145,7 @@ def run_backtest(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="ESS v0 완전예측 백테스트 (실제 입찰 성과 아님)")
-    parser.add_argument("--raw-dir", default="data/raw/portfolio", help="원본 CSV 4개가 있는 폴더")
+    parser.add_argument("--raw-dir", default="data/raw/generation", help="원본 CSV 4개가 있는 폴더")
     parser.add_argument("--start", default="2024-06-01")
     parser.add_argument("--end", default="2025-12-31")
     parser.add_argument("--ess", default="config/ess_v0.yaml")

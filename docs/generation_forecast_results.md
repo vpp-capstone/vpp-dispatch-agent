@@ -58,22 +58,33 @@ LightGBM 회귀모델이며 이용률을 예측한 뒤 `[0, 1]`로 제한하고 
 
 ## 파일
 
-- `solar_lightgbm.joblib`, `wind_lightgbm.joblib`: 모델·피처·범주 매핑 묶음
-- `solar_validation_predictions.parquet`: 2024년 태양광 검증 예측
-- `wind_validation_predictions.parquet`: 2024년 풍력 검증 예측
-- `generation_model_metrics.csv`: 발전원·모델·예측거리·집계수준별 지표
-- `generation_asset_metrics.csv`: 발전소별 지표
-- `solar_feature_importance.csv`, `wind_feature_importance.csv`: 피처 중요도
-- `training_summary.json`: 학습 범위·최적 반복·전체 지표
+모두 Git 제외. 팀 Drive로 공유하며 레포에서는 아래 위치에 둔다.
+
+- `artifacts/models/`
+  - `solar_lightgbm.joblib`, `wind_lightgbm.joblib`: 모델·피처·범주 매핑 묶음
+- `artifacts/predictions/`
+  - `solar_validation_predictions.parquet`: 2024년 태양광 검증 예측
+  - `wind_validation_predictions.parquet`: 2024년 풍력 검증 예측
+- `data/processed/generation_forecast/`
+  - `generation_model_metrics.csv`: 발전원·모델·예측거리·집계수준별 지표
+  - `generation_asset_metrics.csv`: 발전소별 지표
+  - `solar_feature_importance.csv`, `wind_feature_importance.csv`: 피처 중요도
+  - `training_summary.json`: 학습 범위·최적 반복·전체 지표
 
 예측파일의 고유키는 `asset_id + issue_time_utc + valid_time_utc`다. 포트폴리오 예측은
 동일 `issue_time_utc + valid_time_utc`의 발전소별 예측 kWh를 합산한다.
 
 ## 재학습
 
-```powershell
-.\.venv\Scripts\python.exe .\train_generation_models.py
+학습마트(`data/processed/generation_forecast/*_training_mart.parquet`)가 있는 상태에서 저장소 루트에서 실행한다.
+위 파일들이 같은 위치에 다시 생성된다.
+
+```bash
+python -m vpp.generation_forecast.model
 ```
+
+참고: 이 문서의 수치와 공유된 모델·지표 파일은 2026-11-02에 발전량 담당의 로컬 환경(레포 이전 전,
+`train_generation_models.py`)에서 학습한 결과다. 현재 레포의 `model.py`는 같은 코드를 옮긴 것이다.
 
 2025년 수집이 끝나면 2025년 데이터에는 재학습·조기 종료·변수 선택을 하지 않고 저장된
 현재 모델로 먼저 최종 테스트한다. 최종 성능을 확정한 뒤 2023~2024년 전체로 재학습하여
