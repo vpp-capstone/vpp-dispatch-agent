@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from vpp.degradation import build_degradation_model
+
 if TYPE_CHECKING:  # 순환 import 방지 (optimization → validation)
     from vpp.optimization import EssParams
 
@@ -87,9 +89,10 @@ def check_plan(
         v = float(max(lo - energy[-1], energy[-1] - hi))
         checks.append(_item("terminal_energy_max_violation_mwh", v, v <= tol))
     if objective_krw is not None:
-        recomputed_obj = float(price @ sell) - ess.throughput_cost_krw_per_mwh * float(
-            charge.sum() + discharge.sum()
+        degradation = build_degradation_model(
+            ess.degradation_model, ess.throughput_cost_krw_per_mwh, ess.throughput_basis
         )
+        recomputed_obj = float(price @ sell) - degradation.cost_for_arrays(charge, discharge)
         v = abs(recomputed_obj - objective_krw)
         checks.append(_item("objective_recomputed_abs_error_krw", v,
                             v <= 1e-3 + 1e-6 * abs(objective_krw)))

@@ -11,4 +11,6 @@ soc_initial: 0.5            # 백테스트 기간 첫 시작에만 사용. 이�
 charge_efficiency: 0.95
 discharge_efficiency: 0.95
 throughput_cost_krw_per_mwh: 0.0   # 0 = 열화 미반영. 실제 비용이 0이라는 뜻이 아님
+degradation_model: none
+throughput_basis: charge_plus_discharge
 grid_charging_allowed: false       # v0는 계통 충전 금지만 지원
