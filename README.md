@@ -74,6 +74,7 @@ src/vpp/
     dataset.py               발전량 정제 및 GFS 결합 학습마트 생성
     model.py                 기준 모델·LightGBM 학습 및 평가
   market/                    수요·SMP·출력제어 원본 수집 및 통합
+  smp_forecast.py            제주 하루전 SMP 48시간 예측 (docs/smp_forecast.md)
   renewable_targets.py       재생에너지 Target 후보 정제
   build_renewable_history.py 과거 재생에너지 자료 통합
   portfolio_data.py          최적화용 포트폴리오 입력 구성
