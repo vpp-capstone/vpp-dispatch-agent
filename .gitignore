@@ -16,6 +16,11 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+# v0.1 ESS degradation evidence and derived inputs are versioned with the model.
+!data/raw/degradation/
+!data/raw/degradation/**
+!data/processed/degradation/
+!data/processed/degradation/**
 *.parquet
 *.h5
 *.pkl

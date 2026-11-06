@@ -72,7 +72,7 @@ E[마지막] ≥ E_min_final, ≤ E_max_final             (선택, §3 종료 �
 
 ## 5. 데이터 규칙 (`portfolio_data.build_portfolio_hourly`)
 
-원본 4개는 `--raw-dir`로 받으며 레포에 복사하지 않는다 (기본 `data/raw/portfolio/`).
+원본 4개는 로컬 `data/raw/generation/`(발전량 예측과 같은 폴더, `--raw-dir` 기본값)에 두되 Git에 커밋하지 않는다.
 
 | 파일 | 인코딩 | 형태 | 단위·처리 |
 |---|---|---|---|

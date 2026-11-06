@@ -23,6 +23,7 @@ dependencies = [
     "scipy>=1.11",
     "pyyaml>=6.0",
     "openpyxl>=3.1",
+    "holidays>=0.50",
     "streamlit>=1.36",
     "plotly>=5.22",
 ]

@@ -1,35 +1,79 @@
-# 제주 VPP 수요예측·ESS 운영계획
+# 제주 VPP 발전량·SMP 예측 기반 ESS 운영계획
 
-제주 VPP 중개사업자 입장에서 **내일 24시간 전력수요를 1시간 단위로 예측**하고,
-그 예측으로 ESS를 어떻게 돌릴지 정한 뒤 실제 비용이 얼마나 줄었는지 본다.
-일반 예측 모델부터 만들고, 나중에 운영비용을 학습에 반영하는 모델로 확장.
-예측 오차 목표는 5% 이내. 지표(MAPE·nMAE 등)는 팀에서 정함.
+제주 VPP 중개사업자 입장에서, 입찰 마감인 **D-1 11시**에 알 수 있는 기상예보·시장자료만으로
+**다음 48시간의 태양광·풍력 발전량과 제주 하루전 SMP를 1시간 단위로 예측**하고,
+그 예측으로 ESS 충·방전 계획을 세운 뒤 실측으로 결과를 평가한다.
 
-이 저장소는 **각 팀이 구현할 함수 자리와 모듈 간 입출력 형식**만 잡아둔 뼈대.
-자기 파일의 `TODO`·`NotImplementedError` 자리에 로직을 쓰면 된다.
+- 발전량: 한수원 태양광 18개소 + 풍력 3개 단지(성산·한경·상명)의 가상 포트폴리오. 제주 전체가 아니다.
+- 현재 단계: 발전량·SMP 예측을 ESS v0에 연결해 **예측 기반 계획과 실측 기반(완전예측) 계획을 비교**하는 중.
+  실측에 따른 실행 조정·정산은 다음 단계.
+- 초기 기획의 **24시간 수요예측**(`data.py`, `forecast.py`)은 자리만 있고 구현되지 않았다. 유지 여부는 팀 합의 필요.
 
-## 내 자리는 어디?
+## 모듈 현황
 
-| 담당             | 파일 · 함수                                                    | 만들 것 → 넘길 것                                            |
-| ---------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
-| 데이터&수요예측  | `src/vpp/data.py` — `prepare_hourly`, `load_hourly`            | 수집·정렬·결측 처리 → 시간별 DataFrame                       |
-| 데이터&수요예측  | `src/vpp/forecast.py` — `predict_demand`, `train_baseline`     | 특징·모델·학습 → 내일 24개 수요 (`ForecastResponse`)         |
-| 최적화           | `src/vpp/optimization.py` — `plan_ess`                         | ESS 제약·비용·솔버 → 충·방전 계획·SOC (`OptimizationResult`) |
-| 최적화·대시보드  | `src/vpp/evaluation.py` — `evaluate_forecast`, `evaluate_cost` | 예측 오차 / 실측 기준 운영비용 비교                          |
-| 예측·최적화 공동 | `src/vpp/forecast.py` — `train_cost_aware`                     | 위 둘이 끝난 뒤 비용 인지 학습                               |
-| 대시보드         | `src/vpp/pipeline.py`, `api/main.py`, `dashboard/app.py`       | 모듈 연결·API·화면                                           |
-| 전원             | `src/vpp/schemas.py`, `docs/data_contract.md`                  | 입출력 타입·단위·시각. 바꾸기 전에 쓰는 사람과 합의          |
+| 모듈                   | 파일                                                                                   | 상태                                                                          | 문서                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 시장·수요 수집         | `vpp.market`                                                                           | 구현 (PR #1)                                                                  | [data_contract.md](docs/data_contract.md)                                                         |
+| 재생에너지 Target 정제 | `renewable_targets.py`, `build_renewable_history.py`                                   | 구현 (PR #2)                                                                  | [renewable_history.md](docs/renewable_history.md)                                                 |
+| ESS 운영계획 v0        | `optimization.py`, `backtest.py`, `portfolio_data.py`, `validation.py`, `baselines.py` | 구현 (PR #3). 실측을 넣는 완전예측 백테스트. 예측 연결 진행 중                | [formulation.md](docs/formulation.md)                                                             |
+| 발전량 예측 48h        | `generation_forecast/`                                                                 | 구현 (PR #4). 2023 학습·2024 검증까지. 2025 최종 테스트·신규 기간 예측 미구현 | [설계](<docs/generation_forecast_design(11-03).md>) · [결과](docs/generation_forecast_results.md) |
+| SMP 예측 48h           | `smp_forecast.py`                                                                      | 구현 (PR #5)                                                                  | [smp_forecast.md](docs/smp_forecast.md)                                                           |
+| 수요예측 24h           | `data.py`, `forecast.py`                                                               | 미구현 (`NotImplementedError` 자리만)                                         | —                                                                                                 |
+| 평가·정산              | `evaluation.py` — `evaluate_cost`, `evaluate_forecast`                                 | 미구현. 예측 기반 계획을 실측에 적용한 손익 (다음 단계)                       | —                                                                                                 |
+| 파이프라인·API·화면    | `pipeline.py`, `api/main.py`, `dashboard/app.py`                                       | 뼈대. 대시보드의 ESS 화면만 동작                                              | —                                                                                                 |
+| 공통 타입              | `schemas.py`                                                                           | 초안. 최적화·평가 타입은 `status`, `reason`만 있는 빈 틀                      | —                                                                                                 |
 
-- `schemas.py`의 최적화·평가 타입은 `status`, `reason`만 있는 빈 틀. 필요한 필드는 담당팀이 추가.
-- 함수 인자도 초안. 모델 경로, 발행시각 등 필요하면 합의해서 바꾸면 됨.
+- 공통 타입·함수 인자·데이터 형식은 바꾸기 전에 쓰는 사람과 합의.
 - 파일이 커지면 패키지로 쪼개도 됨. import하는 쪽도 같이 고칠 것.
 
-## 순서
+## 흐름
 
-1. 데이터 형식·발행시점 합의 (`docs/data_contract.md`)
-2. 각자 담당 파일 구현 + 테스트 + 실행 방법
-3. 대시보드팀이 `pipeline.py`·API·화면에 연결
-4. 일반 예측 → ESS → 비용 평가까지 이어지면 비용 인지 학습
+```text
+vpp.market ──► data/processed/market/ ──► vpp.smp_forecast ──► SMP 예측 48h ─┐
+                                                                             ├─► ESS 계획 (solve_window) ─► 평가·정산 (미구현)
+data/raw/generation/ ─► vpp.generation_forecast ─► 발전량 예측 48h ───────────┘
+         └──────────────── 실측 발전량·SMP (비교·평가용) ─────────────────────┘
+```
+
+1. 시장 수집 → SMP 예측, 발전량 원본 + GFS → 발전량 예측 (각자 독립 실행)
+2. 같은 계획일 D의 두 예측 48시간을 ESS에 넣어 앞 24시간 계획 확정, SOC 이월
+3. 같은 기간 실측 기반 계획과 비교 (현재 단계)
+4. 확정 계획을 실측에 적용한 정산·손익 평가 (다음 단계)
+
+## 데이터 준비 (설치 전에)
+
+Git에 들어 있는 데이터는 `data/reference/`와 `data/sample/`뿐이다. 나머지는 팀 Drive에서 받아
+아래 위치에 **파일명 그대로** 둔다. 전부 `.gitignore` 대상이라 커밋되지 않는다.
+
+**1. 발전량 원본 CSV 4개 → `data/raw/generation/`** (ESS 백테스트·발전량 예측 공용, 필수)
+
+```text
+제주#1_기상정보 융합 태양광 발전 시계열 데이터.csv
+한국남부발전(주)_성산풍력발전실적_20260331.csv
+한국남부발전(주)_한경풍력발전실적_20260331.csv
+한국중부발전(주)_(AI 친화 데이터)풍력 발전 실적(상명풍력)_20260330.csv
+```
+
+- ESS 백테스트(`vpp.backtest`)와 발전량 예측 모두 이 폴더가 기본값이다.
+- 발전량 예측은 파일명에 `태양광`·`성산풍력`·`한경풍력`·`상명풍력`이 하나씩 들어 있으면 찾는다.
+  macOS에서 받은 한글 파일명은 자모가 분리(NFD)되어 못 찾을 수 있다. 그때는 파일명을 다시 입력해 저장한다.
+
+**2. 예측 결과 (ESS에 예측을 연결할 때)**
+
+| 받는 곳     | 파일                                                                          | 넣는 위치                             |
+| ----------- | ----------------------------------------------------------------------------- | ------------------------------------- |
+| 발전량 담당 | `solar_validation_predictions.parquet`, `wind_validation_predictions.parquet` | `artifacts/predictions/`              |
+| 발전량 담당 | `solar_lightgbm.joblib`, `wind_lightgbm.joblib`                               | `artifacts/models/`                   |
+| 발전량 담당 | `generation_model_metrics.csv` 등 지표·`training_summary.json`                | `data/processed/generation_forecast/` |
+| SMP 담당    | `smp_forecast.csv` (`smp_metrics.csv`)                                        | `data/processed/forecast/`            |
+
+**3. 해당 모듈을 직접 돌릴 때만**
+
+- 발전량 예측 학습: 과거 GFS → `data/raw/gfs_history_core/daily/year=YYYY/month=MM/gfs_YYYYMMDD.parquet`.
+  Drive에서 받거나 `python -m scripts.weather.collect_gfs_history`로 수집.
+- SMP 예측: 시장 정리본 `market_hourly.csv`, `smp_forecast_hourly.csv` → `data/processed/market/`.
+- 시장 수집: 원본은 `data/raw/market/` 아래. 하위 폴더·출처는 [data_contract.md](docs/data_contract.md) 2번 표.
+  OpenAPI는 `.env`의 `DATA_GO_KR_API_KEY` 필요.
 
 ## 설치·실행
 
@@ -59,9 +103,9 @@ pytest                                       # PR 전에 한 번
 초기 단일 연도 점검은 [Target 정제 문서](docs/renewable_targets.md)와
 [품질 보고서](docs/renewable_target_quality_20261010.md)에 보존한다.
 
-수요예측은 기존 `src/vpp/forecast.py`에서 다음 날 24시간을 다룬다. 태양광·풍력
-발전량 예측은 `src/vpp/generation_forecast/`에서 48시간을 다루며, 두 기능은 서로
-다른 입력·출력 계약을 사용한다.
+`src/vpp/forecast.py`는 초기 기획의 24시간 수요예측 자리(미구현)이고, 태양광·풍력
+발전량 예측은 `src/vpp/generation_forecast/`에서 48시간을 다룬다. 두 기능은 서로
+다른 입력·출력 계약을 사용하며, 발전량 예측이 `predict_demand`를 덮어쓰지 않는다.
 
 ```text
 src/vpp/
@@ -74,6 +118,7 @@ src/vpp/
     dataset.py               발전량 정제 및 GFS 결합 학습마트 생성
     model.py                 기준 모델·LightGBM 학습 및 평가
   market/                    수요·SMP·출력제어 원본 수집 및 통합
+  smp_forecast.py            제주 하루전 SMP 48시간 예측 (docs/smp_forecast.md)
   renewable_targets.py       재생에너지 Target 후보 정제
   build_renewable_history.py 과거 재생에너지 자료 통합
   portfolio_data.py          최적화용 포트폴리오 입력 구성
@@ -90,9 +135,13 @@ data/
   reference/                 Git에 포함하는 발전소·GFS 격자 기준정보
   raw/
     generation/              발전량 원본 CSV. 직접 수정 금지, Git 제외
-    gfs_history_core/         일별 과거 GFS Parquet·수집 로그, Git 제외
+    gfs_history_core/        일별 과거 GFS Parquet·수집 로그, Git 제외
+    market/                  시장·수요 원본, Git 제외
   processed/
-    generation_forecast/     정제 발전량 및 태양광·풍력 학습마트, Git 제외
+    market/                  시장 정리본 (vpp.market), Git 제외
+    forecast/                SMP 예측 결과 (vpp.smp_forecast), Git 제외
+    generation_forecast/     정제 발전량·학습마트·모델 지표, Git 제외
+    backtest/                ESS 백테스트 실행 결과, Git 제외
   sample/                    화면·재현 확인용 소형 샘플
 
 artifacts/
@@ -108,7 +157,7 @@ docs/
   generation_asset_validation.md  발전소 21개소 데이터 점검 결과
   generation_forecast_design(11-03).md  발전량 예측 설계
   GITHUB_REPO_HANDOFF.md      발전량 예측 코드 이전 인수인계
-  results/                   모델 학습 시 지표·특성 중요도 생성
+  generation_forecast_results.md  발전량 모델 2024 검증 결과 (지표 원본은 data/processed/generation_forecast/)
 
 api/main.py                  FastAPI 진입점
 dashboard/app.py             Streamlit 대시보드
@@ -123,3 +172,10 @@ pyproject.toml               패키지·의존성·pytest·ruff 설정
 - 공통 타입·함수 인자·데이터 형식은 바꾸기 전에 쓰는 사람과 합의.
 - 원본 데이터·모델·API 키는 커밋 금지. 키는 `.env`에, 양식은 `.env.example`.
 - 원본 데이터는 팀 Drive로 공유. 같은 버전을 각자 `data/raw/`에.
+
+## 발전량·SMP → ESS 입력 검증
+
+공유된 실측 CSV와 예측 파일을 검사하려면 [데이터 인수인계 검증](docs/data_handoff_audit.md)을 따른다.
+검증용 예측의 불완전한 48시간 창을 제외하려면 `--incomplete-windows exclude`를 명시한다.
+모델·최적화·대시보드의 기존 동작은 변경하지 않으며, 검사 결과는 운영 수익 검증과 구분한다.
+[실제 공유 파일 검사 결과](docs/results/forecast_handoff_20261106.md): 완전한 공통 계획 188개.

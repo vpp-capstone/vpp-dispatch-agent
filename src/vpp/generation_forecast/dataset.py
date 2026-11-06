@@ -351,7 +351,7 @@ def add_time_features(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     local = result["valid_time_kst"]
     hour = local.dt.hour
-    day = local.dt.dayofyear
+    day = local.dt.day_of_year
     result["hour_kst"] = hour.astype("int8")
     result["month_kst"] = local.dt.month.astype("int8")
     result["day_of_year"] = day.astype("int16")

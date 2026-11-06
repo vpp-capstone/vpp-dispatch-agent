@@ -20,6 +20,7 @@ import pandas as pd
 import yaml
 from scipy.optimize import Bounds, LinearConstraint, milp
 
+from vpp.degradation import build_degradation_model
 from vpp.schemas import OptimizationRequest, OptimizationResult
 from vpp.validation import check_plan
 
@@ -40,6 +41,8 @@ class EssParams:
     charge_efficiency: float
     discharge_efficiency: float
     throughput_cost_krw_per_mwh: float = 0.0
+    degradation_model: str = "fixed_throughput"
+    throughput_basis: str = "charge_plus_discharge"
     grid_charging_allowed: bool = False
     status: str = "assumption_not_equipment_spec"
 
@@ -68,6 +71,9 @@ class EssParams:
         )
         if not ok:
             raise ValueError("ESS 용량/출력/SOC/효율/비용 범위를 확인하세요.")
+        build_degradation_model(
+            self.degradation_model, self.throughput_cost_krw_per_mwh, self.throughput_basis
+        )
         if self.grid_charging_allowed:
             raise ValueError("v0는 계통 충전 금지만 지원합니다 (grid_charging_allowed=false).")
 
@@ -90,6 +96,16 @@ class EssParams:
     def clip_energy(self, energy_mwh: float) -> float:
         """부동소수점 오차가 다음 창의 시작 에너지 검사를 깨지 않도록 SOC 범위로 보정."""
         return min(self.energy_max_mwh, max(self.energy_min_mwh, float(energy_mwh)))
+
+    def degradation(self):
+        """설정에 맞는 열화비 모델. 목적함수·사후 집계·검산이 모두 이 모델의 비용 함수를 쓴다."""
+        return build_degradation_model(
+            self.degradation_model, self.throughput_cost_krw_per_mwh, self.throughput_basis
+        )
+
+    def degradation_cost_krw(self, charge_mwh, discharge_mwh) -> float:
+        """계획 배열의 열화비. 직접 `비용 × (충전+방전)` 을 쓰지 말고 이 함수를 호출한다."""
+        return float(self.degradation().cost_for_arrays(charge_mwh, discharge_mwh))
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> EssParams:
@@ -226,7 +242,9 @@ def solve_window(
         raise ValueError("종료 에너지 하한이 상한보다 큽니다.")
 
     cap_c, cap_d = ess.charge_power_mw * dt, ess.discharge_power_mw * dt
-    ec, ed, wear = ess.charge_efficiency, ess.discharge_efficiency, ess.throughput_cost_krw_per_mwh
+    ec, ed = ess.charge_efficiency, ess.discharge_efficiency
+    degradation = ess.degradation()
+    charge_wear, discharge_wear = degradation.milp_coefficients(n)
 
     # 변수 블록: 판매 q, 충전 c, 방전 d, 감축 r, 구간 끝 에너지 e, 충전 모드 z∈{0,1}.
     q, c, d, r, e, z = (np.arange(n) + k * n for k in range(6))
@@ -239,7 +257,7 @@ def solve_window(
     if export_cap is not None:
         upper[q] = export_cap
     objective = np.zeros(6 * n)
-    objective[q], objective[c], objective[d] = -price, wear, wear  # milp는 최소화
+    objective[q], objective[c], objective[d] = -price, charge_wear, discharge_wear  # milp는 최소화
     integrality = np.zeros(6 * n, dtype=int)
     integrality[z] = 1
 
@@ -273,7 +291,7 @@ def solve_window(
     x = result.x
     sell, charge, discharge, curtailed, energy = (x[idx] for idx in (q, c, d, r, e))
     sales = float(price @ sell)
-    wear_cost = float(wear * (charge.sum() + discharge.sum()))
+    wear_cost = degradation.cost_for_arrays(charge, discharge)
     window = WindowResult(
         sell_mwh=sell,
         charge_mwh=charge,
@@ -327,6 +345,161 @@ def _prepare_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ---------------------------------------------------------------- 공통 계획 엔진
+# 운영계획 생성(operating_plan)과 백테스트(run_rolling, forecast_rolling.run_segment)가 모두
+# plan_window 하나로 창을 풀고 확정 구간·수익·열화비를 집계한다. 최적화 계산을 다른 곳에 다시 쓰지
+# 않는다.
+
+PLAN_COLUMNS = (
+    "sell_mwh", "charge_mwh", "discharge_mwh", "curtailment_mwh", "energy_end_mwh", "soc_end",
+)
+
+
+@dataclass(frozen=True)
+class Terminal:
+    """창 끝 에너지 제약(종료 정책).
+
+    - none: 제약 없음 (운영계획 48시간, 백테스트의 마지막이 아닌 날)
+    - period_end_ge_initial: E[끝] ≥ 기간 시작 에너지 (백테스트 rolling48 의 마지막 창)
+    - equal_window_initial: E[끝] = 창 시작 에너지 (equal_initial 정책)
+    """
+
+    name: str = "none"
+    final_energy_min_mwh: float | None = None
+    final_energy_max_mwh: float | None = None
+
+    @classmethod
+    def period_end_ge_initial(cls, energy_mwh: float) -> Terminal:
+        return cls("period_end_ge_initial", float(energy_mwh), None)
+
+    @classmethod
+    def equal_window_initial(cls, energy_mwh: float) -> Terminal:
+        return cls("equal_window_initial", float(energy_mwh), float(energy_mwh))
+
+
+NO_TERMINAL = Terminal()
+
+
+@dataclass(frozen=True)
+class WindowPlan:
+    """plan_window 의 결과. hourly 는 창 전체(입력 열 + 계획 열 + committed 플래그)."""
+
+    hourly: pd.DataFrame
+    initial_energy_mwh: float
+    committed_intervals: int
+    terminal: Terminal
+    solver_status: str
+    mip_gap: float
+    checks: list[dict[str, Any]]
+    degradation: dict[str, Any]
+    _ess: EssParams = field(repr=False, compare=False)
+
+    @property
+    def committed(self) -> pd.DataFrame:
+        return self.hourly[self.hourly["committed"]]
+
+    @property
+    def provisional(self) -> pd.DataFrame:
+        return self.hourly[~self.hourly["committed"]]
+
+    @property
+    def final_committed_energy_mwh(self) -> float:
+        """확정 구간 끝 에너지 (다음 날 시작 에너지로 넘기는 값). SOC 범위로 보정."""
+        return self._ess.clip_energy(self.committed["energy_end_mwh"].iloc[-1])
+
+    @property
+    def final_solved_energy_mwh(self) -> float:
+        return float(self.hourly["energy_end_mwh"].iloc[-1])
+
+    def totals(self, committed_only: bool = True) -> dict[str, float]:
+        """판매수익·열화비·차감 후 계획 수익과 물량 합계. 기본은 확정 구간만."""
+        part = self.committed if committed_only else self.hourly
+        price = part["price_krw_per_mwh"].to_numpy()
+        gen = part["generation_mwh"].to_numpy()
+        sales = float(price @ part["sell_mwh"].to_numpy())
+        wear = self._ess.degradation_cost_krw(part["charge_mwh"], part["discharge_mwh"])
+        return {
+            "sales_revenue_krw": sales,
+            "throughput_cost_krw": wear,
+            "objective_krw": sales - wear,
+            "no_ess_same_curtailment_policy_krw": float(np.maximum(price, 0) @ gen),
+            "generation_mwh": float(gen.sum()),
+            "sell_mwh": float(part["sell_mwh"].sum()),
+            "charge_mwh": float(part["charge_mwh"].sum()),
+            "discharge_mwh": float(part["discharge_mwh"].sum()),
+            "curtailment_mwh": float(part["curtailment_mwh"].sum()),
+        }
+
+    def summary_row(self) -> dict[str, Any]:
+        """롤링 결과의 daily 한 행 (확정 구간 기준)."""
+        committed = self.committed
+        return {
+            "start_ts": committed["ts"].iloc[0],
+            "end_ts": committed["ts"].iloc[-1],
+            "solved_intervals": int(len(self.hourly)),
+            "committed_intervals": int(self.committed_intervals),
+            "committed_hours": float(committed["dt_hours"].sum()),
+            "initial_energy_mwh": self.initial_energy_mwh,
+            "final_energy_mwh": self.final_committed_energy_mwh,
+            **self.totals(committed_only=True),
+            "mip_gap": self.mip_gap,
+            "terminal_constraint": self.terminal.name,
+        }
+
+
+def plan_window(
+    frame: pd.DataFrame,
+    ess: EssParams,
+    initial_energy_mwh: float,
+    *,
+    commit_hours: float = 24.0,
+    terminal: Terminal = NO_TERMINAL,
+    export_cap_col: str | None = None,
+    tol: float = 1e-6,
+) -> WindowPlan:
+    """한 창(ts, generation_mwh, price_krw_per_mwh[, dt_hours])을 풀고 앞 commit_hours 를 확정한다.
+
+    창 길이는 frame 이 정한다 (운영계획 48행, 백테스트 마지막 날 24행 등). 나머지 행은 잠정
+    (provisional) 계획으로 hourly 에 남지만 totals/summary_row 의 기본 집계에는 들어가지 않는다.
+    열화비는 ess.degradation() 의 비용 함수로만 계산한다.
+    """
+    data = _prepare_frame(frame)
+    if export_cap_col is not None and export_cap_col not in data.columns:
+        raise ValueError(f"판매 상한 컬럼이 없습니다: {export_cap_col}")
+    dt = data["dt_hours"].to_numpy()
+    elapsed = np.cumsum(dt) - dt
+    n_commit = int((elapsed < commit_hours - 1e-9).sum())
+    if n_commit == 0:
+        raise ValueError("확정할 구간이 없습니다 (commit_hours 가 첫 구간보다 짧음).")
+    export_cap = None if export_cap_col is None else data[export_cap_col].to_numpy()
+    solved = solve_window(
+        data["generation_mwh"].to_numpy(),
+        data["price_krw_per_mwh"].to_numpy(),
+        dt,
+        ess,
+        initial_energy_mwh,
+        final_energy_min_mwh=terminal.final_energy_min_mwh,
+        export_cap_mwh=export_cap,
+        final_energy_max_mwh=terminal.final_energy_max_mwh,
+        tol=tol,
+    )
+    hourly = data.copy()
+    for col in PLAN_COLUMNS:
+        hourly[col] = getattr(solved, col)
+    hourly["committed"] = np.arange(len(hourly)) < n_commit
+    return WindowPlan(
+        hourly=hourly,
+        initial_energy_mwh=solved.initial_energy_mwh,
+        committed_intervals=n_commit,
+        terminal=terminal,
+        solver_status=solved.solver_status,
+        mip_gap=solved.mip_gap,
+        checks=solved.checks,
+        degradation=ess.degradation().metadata(),
+        _ess=ess,
+    )
+
+
 def run_rolling(
     frame: pd.DataFrame,
     ess: EssParams,
@@ -368,71 +541,23 @@ def run_rolling(
     eps = 1e-9
     while offset < total_hours - eps:
         in_window = (elapsed >= offset - eps) & (elapsed < offset + horizon_hours - eps)
-        in_commit = (elapsed >= offset - eps) & (elapsed < offset + commit_hours - eps)
         idx = np.flatnonzero(in_window)
-        n_commit = int(in_commit.sum())
         is_last = offset + commit_hours >= total_hours - eps
-        block = data.iloc[idx]
-        final_lo = final_hi = None
         if policy == "rolling48" and is_last:
-            final_lo = period_start_energy
+            terminal = Terminal.period_end_ge_initial(period_start_energy)
         elif policy == "equal_initial":
-            final_lo = final_hi = start
-        export_cap = None if export_cap_col is None else block[export_cap_col].to_numpy()
-        window = solve_window(
-            block["generation_mwh"].to_numpy(),
-            block["price_krw_per_mwh"].to_numpy(),
-            block["dt_hours"].to_numpy(),
-            ess,
-            start,
-            final_energy_min_mwh=final_lo,
-            export_cap_mwh=export_cap,
-            final_energy_max_mwh=final_hi,
-            tol=tol,
+            terminal = Terminal.equal_window_initial(start)
+        else:
+            terminal = Terminal()
+        plan = plan_window(
+            data.iloc[idx], ess, start, commit_hours=commit_hours, terminal=terminal,
+            export_cap_col=export_cap_col, tol=tol,
         )
-        sl = slice(0, n_commit)
-        committed = block.iloc[sl].copy()
-        committed["sell_mwh"] = window.sell_mwh[sl]
-        committed["charge_mwh"] = window.charge_mwh[sl]
-        committed["discharge_mwh"] = window.discharge_mwh[sl]
-        committed["curtailment_mwh"] = window.curtailment_mwh[sl]
-        committed["energy_end_mwh"] = window.energy_end_mwh[sl]
-        committed["soc_end"] = window.soc_end[sl]
+        committed = plan.committed.drop(columns="committed")
         committed["window_id"] = window_id
         hourly_parts.append(committed)
-
-        price_c = committed["price_krw_per_mwh"].to_numpy()
-        gen_c = committed["generation_mwh"].to_numpy()
-        sales = float(price_c @ window.sell_mwh[sl])
-        throughput = window.charge_mwh[sl].sum() + window.discharge_mwh[sl].sum()
-        wear_cost = float(ess.throughput_cost_krw_per_mwh * throughput)
-        final_energy = ess.clip_energy(window.energy_end_mwh[n_commit - 1])
-        daily_rows.append(
-            {
-                "window_id": window_id,
-                "start_ts": committed["ts"].iloc[0],
-                "end_ts": committed["ts"].iloc[-1],
-                "solved_intervals": int(len(idx)),
-                "committed_intervals": n_commit,
-                "committed_hours": float(committed["dt_hours"].sum()),
-                "initial_energy_mwh": start,
-                "final_energy_mwh": final_energy,
-                "sales_revenue_krw": sales,
-                "throughput_cost_krw": wear_cost,
-                "objective_krw": sales - wear_cost,
-                "no_ess_same_curtailment_policy_krw": float(np.maximum(price_c, 0) @ gen_c),
-                "charge_mwh": float(window.charge_mwh[sl].sum()),
-                "discharge_mwh": float(window.discharge_mwh[sl].sum()),
-                "curtailment_mwh": float(window.curtailment_mwh[sl].sum()),
-                "mip_gap": window.mip_gap,
-                "terminal_constraint": (
-                    "period_end_ge_initial" if policy == "rolling48" and is_last
-                    else "equal_window_initial" if policy == "equal_initial"
-                    else "none"
-                ),
-            }
-        )
-        start = final_energy
+        daily_rows.append({"window_id": window_id, **plan.summary_row()})
+        start = plan.final_committed_energy_mwh
         offset += commit_hours
         window_id += 1
 

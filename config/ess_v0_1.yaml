@@ -1,0 +1,16 @@
+# ESS v0.1: v0에 공개 LFP 자료 기반 1단계 고정 처리량 열화비를 적용한 시나리오.
+# 실제 설비의 chemistry·가격·수명 확인 전까지는 assumption_not_equipment_spec이다.
+status: assumption_not_equipment_spec
+
+capacity_mwh: 16.0
+charge_power_mw: 4.0
+discharge_power_mw: 4.0
+soc_min: 0.1
+soc_max: 0.9
+soc_initial: 0.5
+charge_efficiency: 0.95
+discharge_efficiency: 0.95
+degradation_model: fixed_throughput
+throughput_basis: charge_plus_discharge
+throughput_cost_krw_per_mwh: 64096.38   # data/processed/degradation/stage1_basis.csv 참조
+grid_charging_allowed: false

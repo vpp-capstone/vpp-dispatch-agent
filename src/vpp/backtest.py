@@ -59,6 +59,17 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(text + "\n", encoding="utf-8")
 
 
+def new_run_dir(out_dir: str | Path, run_id: str, overwrite: bool = False) -> Path:
+    """결과 폴더를 만든다. 이미 있으면 기본은 덮어쓰지 않고 예외 (--overwrite 로만 허용)."""
+    out = Path(out_dir) / run_id
+    if out.exists() and any(out.iterdir()) and not overwrite:
+        raise FileExistsError(
+            f"결과 폴더가 이미 있습니다: {out}. 다른 --run-id 를 쓰거나 --overwrite 를 주세요."
+        )
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
 def _daily_table(
     plan: RollingResult, baselines: dict[str, pd.DataFrame], ess: EssParams
 ) -> pd.DataFrame:
@@ -90,6 +101,7 @@ def run_backtest(
     market_path: str | Path | None = None,
     out_dir: str | Path = "data/processed/backtest",
     run_id: str | None = None,
+    overwrite: bool = False,
 ) -> Path:
     """백테스트 전체를 실행하고 결과 폴더 경로를 반환."""
     ess = EssParams.from_yaml(ess_path)
@@ -107,8 +119,7 @@ def run_backtest(
     daily = _daily_table(plan, baselines, ess)
 
     run_id = run_id or f"{start}_{end}_{policy}_{datetime.now():%Y%m%d%H%M%S}"
-    out = Path(out_dir) / run_id
-    out.mkdir(parents=True, exist_ok=True)
+    out = new_run_dir(out_dir, run_id, overwrite)
     plan.hourly.to_csv(out / "hourly_plan.csv", index=False, encoding="utf-8-sig")
     daily.to_csv(out / "daily_summary.csv", index=False, encoding="utf-8-sig")
     merged = frame[["ts", "generation_mwh", "price_krw_per_mwh"]].copy()
@@ -145,7 +156,7 @@ def run_backtest(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="ESS v0 완전예측 백테스트 (실제 입찰 성과 아님)")
-    parser.add_argument("--raw-dir", default="data/raw/portfolio", help="원본 CSV 4개가 있는 폴더")
+    parser.add_argument("--raw-dir", default="data/raw/generation", help="원본 CSV 4개가 있는 폴더")
     parser.add_argument("--start", default="2024-06-01")
     parser.add_argument("--end", default="2025-12-31")
     parser.add_argument("--ess", default="config/ess_v0.yaml")
@@ -158,12 +169,14 @@ def main(argv: list[str] | None = None) -> None:
                         help="가격 대조용 market_hourly.csv (기본: data/processed/market/)")
     parser.add_argument("--out", default="data/processed/backtest")
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--overwrite", action="store_true",
+                        help="같은 run-id 결과 폴더 덮어쓰기 허용")
     args = parser.parse_args(argv)
     out = run_backtest(
         args.raw_dir, args.start, args.end, args.ess, policy=args.policy,
         horizon_hours=args.horizon_hours, commit_hours=args.commit_hours,
         clip_to_capacity=args.clip_to_capacity, market_path=args.market,
-        out_dir=args.out, run_id=args.run_id,
+        out_dir=args.out, run_id=args.run_id, overwrite=args.overwrite,
     )
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     print(f"결과 폴더: {out}")
