@@ -124,3 +124,10 @@ pyproject.toml               패키지·의존성·pytest·ruff 설정
 - 공통 타입·함수 인자·데이터 형식은 바꾸기 전에 쓰는 사람과 합의.
 - 원본 데이터·모델·API 키는 커밋 금지. 키는 `.env`에, 양식은 `.env.example`.
 - 원본 데이터는 팀 Drive로 공유. 같은 버전을 각자 `data/raw/`에.
+
+## 발전량·SMP → ESS 입력 검증
+
+공유된 실측 CSV와 예측 파일을 검사하려면 [데이터 인수인계 검증](docs/data_handoff_audit.md)을 따른다.
+검증용 예측의 불완전한 48시간 창을 제외하려면 `--incomplete-windows exclude`를 명시한다.
+모델·최적화·대시보드의 기존 동작은 변경하지 않으며, 검사 결과는 운영 수익 검증과 구분한다.
+[실제 공유 파일 검사 결과](docs/results/forecast_handoff_20261106.md): 완전한 공통 계획 188개.
