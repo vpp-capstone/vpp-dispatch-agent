@@ -2,12 +2,15 @@
 
     python -m vpp.forecast_backtest --start 2024-06-05 --end 2024-06-11 \
         [--solar <parquet>] [--wind <parquet>] [--smp <csv>] [--ess config/ess_v0.yaml] \
-        [--out data/processed/backtest] [--run-id <이름>]
+        [--out data/processed/backtest] [--run-id <이름>] [--overwrite]
+
+같은 run-id 폴더가 있으면 기본은 덮어쓰지 않는다 (--overwrite 로만 허용).
 
 출력: <out>/<실행ID>/
     hourly_forecast.csv, hourly_actual.csv   시나리오별 확정 24시간 계획 (계획일·구간 표시)
     daily_comparison.csv                      계획일별 두 시나리오 나란히 (계획 수익 차이 포함)
-    excluded_days.csv                         창을 만들지 못한 계획일과 사유
+    excluded_days.csv                         제외한 계획일과 사유 (stage=plan: 예측 부족으로
+                                              계획 불가, comparison: 실측 부족으로 비교만 불가)
     comparison.html                           SOC 이월·충방전 비교 그래프
     summary.json, validation.json             합계·입력·가정 / 비교 조건 검사·제약 검산
 
@@ -29,7 +32,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from vpp import forecast_inputs as fi
-from vpp.backtest import _json_default, _write_json
+from vpp.backtest import _json_default, _write_json, new_run_dir
 from vpp.forecast_rolling import (
     COMMIT_HOURS,
     SegmentResult,
@@ -37,6 +40,7 @@ from vpp.forecast_rolling import (
     run_scenario,
     soc_trace,
 )
+from vpp.operating_plan import resolve_ess
 from vpp.optimization import EssParams
 from vpp.validation import check_plan
 
@@ -179,8 +183,11 @@ def comparison_warnings(
 def plan_checks(results: list[SegmentResult], ess: EssParams) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for r in results:
+        # objective_krw 를 넘기면 check_plan 이 열화모델 비용 함수로 목적함수를 다시 계산해 대조한다
+        # (집계 수익 = 판매 − 모델 열화비 인지 검증).
         checks = check_plan(r.result.hourly, ess,
-                            initial_energy_mwh=r.result.period_initial_energy_mwh)
+                            initial_energy_mwh=r.result.period_initial_energy_mwh,
+                            objective_krw=r.result.objective_krw)
         out.append({"scenario": r.scenario, "segment_id": r.segment_id,
                     "plan_checks": checks, "rolling_checks": r.result.checks,
                     "all_passed": all(c["passed"] for c in checks + r.result.checks)})
@@ -237,17 +244,31 @@ def run_forecast_backtest(
     smp_path: Path = fi.DEFAULT_SMP_FORECAST,
     plants_path: Path = fi.PLANT_MASTER_PATH,
     ess_path: str | Path = "config/ess_v0.yaml",
+    degradation_path: str | Path | None = None,
     out_dir: str | Path = "data/processed/backtest",
     run_id: str | None = None,
+    overwrite: bool = False,
 ) -> Path:
-    """예측·실측 두 시나리오를 같은 창으로 풀고 결과 폴더 경로를 돌려준다."""
-    ess = EssParams.from_yaml(ess_path)
+    """예측·실측 두 시나리오를 같은 창·같은 ESS·열화비 설정으로 풀고 결과 폴더 경로를 돌려준다."""
+    ess = resolve_ess(ess_path, degradation_path)  # 운영계획과 같은 설정 해석
     pred = fi.load_generation_predictions(solar_path, wind_path, plants_path)
     portfolio = fi.aggregate_portfolio(pred, fi.expected_assets(plants_path))
     smp = fi.load_smp_forecast(smp_path)
-    windows, excluded = fi.build_plan_windows(portfolio, smp, start, end)
+    all_windows, plan_excluded = fi.build_plan_windows(portfolio, smp, start, end)
+    if not all_windows:
+        raise RuntimeError(f"만든 창이 없습니다. 제외 사유: {plan_excluded.to_dict('records')}")
+    # 비교는 예측·실측이 모두 있는 날만, 두 시나리오를 같은 날짜 집합으로 돈다.
+    # 실측만 없는 날(계획은 가능)은 stage=comparison 으로 제외표에 남긴다.
+    windows = fi.comparable_windows(all_windows)
+    comparison_excluded = fi.comparison_exclusions(all_windows)
+    excluded = pd.concat([
+        plan_excluded.assign(stage="plan"),
+        comparison_excluded.assign(stage="comparison"),
+    ], ignore_index=True).sort_values("planning_day").reset_index(drop=True)
     if not windows:
-        raise RuntimeError(f"만든 창이 없습니다. 제외 사유: {excluded.to_dict('records')}")
+        raise RuntimeError(
+            f"비교할 수 있는 창이 없습니다. 제외 사유: {excluded.to_dict('records')}"
+        )
 
     forecast = run_scenario(windows, ess, "forecast")
     actual = run_scenario(windows, ess, "actual")
@@ -258,8 +279,7 @@ def run_forecast_backtest(
     plans = plan_checks(forecast, ess) + plan_checks(actual, ess)
 
     run_id = run_id or f"forecast_{start}_{end}"
-    out = Path(out_dir) / run_id
-    out.mkdir(parents=True, exist_ok=True)
+    out = new_run_dir(out_dir, run_id, overwrite)
     hourly_f.to_csv(out / "hourly_forecast.csv", index=False, encoding="utf-8-sig")
     hourly_a.to_csv(out / "hourly_actual.csv", index=False, encoding="utf-8-sig")
     daily.to_csv(out / "daily_comparison.csv", index=False, encoding="utf-8-sig")
@@ -274,7 +294,10 @@ def run_forecast_backtest(
         "start": start.isoformat(),
         "end": end.isoformat(),
         "days": totals["forecast"]["days"],
-        "excluded_days": int(len(excluded)),
+        "excluded_days": int(len(plan_excluded)),
+        "comparison_excluded_days": int(len(comparison_excluded)),
+        "plan_only_days_note": "comparison_excluded_days 는 예측은 있어 계획은 가능하지만 "
+                               "실측이 없어 비교에서 뺀 날",
         "policy": "rolling48",
         "horizon_hours": 48.0,
         "commit_hours": float(COMMIT_HOURS),
@@ -287,6 +310,7 @@ def run_forecast_backtest(
         "inputs": {
             "solar_predictions": str(solar_path), "wind_predictions": str(wind_path),
             "smp_forecast": str(smp_path), "plants": str(plants_path), "ess": str(ess_path),
+            "degradation_config": str(degradation_path or ess_path),
             "generation_forecast_issue": "D-2 18 UTC (GFS), forecast_day_offset 0·1",
             "smp_forecast_issue": "D-1 11:00 KST, horizon 1·2",
             "window_sources": [s for r in forecast for s in r.sources],
@@ -304,7 +328,8 @@ def run_forecast_backtest(
         "plan_checks": plans,
         "plan_checks_all_passed": all(p["all_passed"] for p in plans),
         "data_checks": {
-            "windows_built": int(len(windows)),
+            "windows_built": int(len(all_windows)),
+            "comparable_windows": int(len(windows)),
             "excluded_days": excluded.assign(
                 planning_day=excluded["planning_day"].astype(str)
             ).to_dict("records"),
@@ -326,12 +351,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--smp", type=Path, default=fi.DEFAULT_SMP_FORECAST)
     parser.add_argument("--plants", type=Path, default=fi.PLANT_MASTER_PATH)
     parser.add_argument("--ess", default="config/ess_v0.yaml")
+    parser.add_argument("--degradation-config", default=None,
+                        help="열화비 설정만 가져올 YAML (예: config/ess_v0_1.yaml). "
+                             "없으면 --ess 값")
     parser.add_argument("--out", default="data/processed/backtest")
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--overwrite", action="store_true",
+                        help="같은 run-id 결과 폴더 덮어쓰기 허용")
     args = parser.parse_args(argv)
     out = run_forecast_backtest(
         args.start, args.end, solar_path=args.solar, wind_path=args.wind, smp_path=args.smp,
-        plants_path=args.plants, ess_path=args.ess, out_dir=args.out, run_id=args.run_id,
+        plants_path=args.plants, ess_path=args.ess, degradation_path=args.degradation_config,
+        out_dir=args.out, run_id=args.run_id, overwrite=args.overwrite,
     )
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))

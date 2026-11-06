@@ -95,9 +95,10 @@ def test_missing_asset_hour_excludes_window_with_reason():
     hour = pd.Timestamp(DAYS[1], tz=KST) + pd.Timedelta(hours=30)
     drop = (pred["asset_id"] == "wind_b") & (pred["valid_time_kst"] == hour)
     port = fi.aggregate_portfolio(pred[~drop], EXPECTED)
-    gen, reason = fi.generation_window(port, DAYS[1])
+    gen, reason, actual_reason = fi.generation_window(port, DAYS[1])
     assert gen is None and reason.startswith("generation_incomplete_assets")
-    assert fi.generation_window(port, DAYS[0])[1] is None
+    assert actual_reason is None
+    assert fi.generation_window(port, DAYS[0])[1:] == (None, None)
 
 
 def test_plan_window_separates_forecast_and_actual():
@@ -141,7 +142,55 @@ def test_nan_forecast_excluded_not_filled():
     pred.loc[pred.index[5], "lightgbm_generation_kwh"] = np.nan
     port = fi.aggregate_portfolio(pred, EXPECTED)
     _, reason = fi.build_plan_window(port, make_smp(DAYS[:1]), DAYS[0])
-    assert reason == "generation_nan"
+    assert reason == "generation_forecast_nan"
+    smp = make_smp(DAYS[:1])
+    smp.loc[3, "smp_hat_krw_per_mwh"] = np.nan
+    _, reason = fi.build_plan_window(fi.aggregate_portfolio(make_predictions(DAYS[:1]), EXPECTED),
+                                     smp, DAYS[0])
+    assert reason == "price_forecast_nan"
+
+
+def test_missing_actual_keeps_plan_window_but_marks_not_comparable():
+    """실측이 비어도 예측 창은 만들고, 그 날은 비교에서만 뺀다 (계획 불가 제외표에 안 들어감)."""
+    pred = make_predictions(DAYS)
+    # DAYS[2] 07시 실측 결측 → 그 시각을 담는 발표분 둘(DAYS[1] 2일차, DAYS[2] 1일차) 모두 비교 불가
+    hour = pd.Timestamp(DAYS[2], tz=KST) + pd.Timedelta(hours=7)
+    pred.loc[(pred["asset_id"] == "solar_03") & (pred["valid_time_kst"] == hour),
+             "generation_kwh"] = np.nan
+    smp = make_smp(DAYS)
+    smp.loc[smp["issue_date"] == (DAYS[2] - timedelta(days=1)).isoformat(), "smp_actual"] = np.nan
+    port = fi.aggregate_portfolio(pred, EXPECTED)
+    windows, excluded = fi.build_plan_windows(port, smp, DAYS[0], DAYS[-1])
+    assert [w.planning_day for w in windows] == DAYS and excluded.empty
+    assert windows[0].comparable and windows[0].actual is not None
+    assert not windows[1].comparable and windows[1].actual is None
+    assert windows[1].comparison_reason == "generation_actual_nan:1"
+    assert windows[2].comparison_reason == "generation_actual_nan:1;price_actual_missing"
+    assert len(windows[1].forecast) == 48
+    comp = fi.comparison_exclusions(windows)
+    assert comp["planning_day"].tolist() == DAYS[1:]
+    assert [w.planning_day for w in fi.comparable_windows(windows)] == DAYS[:1]
+
+
+def test_files_without_actual_columns_load(tmp_path):
+    """실측 열이 아예 없는 예측 파일로도 계획 창이 만들어진다."""
+    pred = make_predictions(DAYS[:1]).drop(columns=["generation_kwh"])
+    pred[pred["energy_type"] == "solar"].to_parquet(tmp_path / "solar.parquet", index=False)
+    pred[pred["energy_type"] == "wind"].to_parquet(tmp_path / "wind.parquet", index=False)
+    pd.DataFrame({"asset_id": SOLAR + WIND,
+                  "energy_type": ["solar"] * len(SOLAR) + ["wind"] * len(WIND)}
+                 ).to_csv(tmp_path / "plants.csv", index=False)
+    make_smp(DAYS[:1]).drop(columns=["smp_actual"]).to_csv(tmp_path / "smp.csv", index=False)
+    loaded = fi.load_generation_predictions(tmp_path / "solar.parquet", tmp_path / "wind.parquet",
+                                            tmp_path / "plants.csv")
+    assert loaded["generation_kwh"].isna().all()
+    smp = fi.load_smp_forecast(tmp_path / "smp.csv")
+    assert smp["smp_actual"].isna().all()
+    port = fi.aggregate_portfolio(loaded, fi.expected_assets(tmp_path / "plants.csv"))
+    window, reason = fi.build_plan_window(port, smp, DAYS[0])
+    assert reason is None and window.actual is None
+    assert window.comparison_reason == "generation_actual_missing;price_actual_missing"
+    assert np.allclose(window.forecast["generation_mwh"], 2.1)
 
 
 def test_contiguous_segments_split_on_gap():

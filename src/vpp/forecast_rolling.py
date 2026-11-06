@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from vpp.forecast_inputs import PlanWindow, contiguous_segments
-from vpp.optimization import EssParams, RollingResult, solve_window
+from vpp.optimization import EssParams, RollingResult, Terminal, plan_window
 
 SCENARIOS = ("forecast", "actual")
 COMMIT_HOURS = 24
@@ -45,6 +45,11 @@ def _inputs(window: PlanWindow, scenario: str) -> pd.DataFrame:
     if scenario not in SCENARIOS:
         raise ValueError(f"scenario 는 {SCENARIOS} 중 하나여야 합니다: {scenario!r}")
     frame = window.forecast if scenario == "forecast" else window.actual
+    if frame is None:
+        raise ValueError(
+            f"{window.planning_day} 는 실측이 없어 actual 시나리오를 풀 수 없습니다 "
+            f"({window.comparison_reason}). comparable_windows 로 거르세요."
+        )
     required = {"ts", "generation_mwh", "price_krw_per_mwh", "dt_hours"}
     missing = required - set(frame.columns)
     if missing:
@@ -75,62 +80,22 @@ def run_segment(
     for window_id, window in enumerate(segment):
         frame = _inputs(window, scenario)
         is_last = window_id == len(segment) - 1
-        # 마지막 계획일은 D 24시간만 풀고 마감 (rolling48 과 동일). 그 외는 48h 풀고 24h 확정.
+        # 백테스트 구간 종료 규칙: 마지막 계획일은 D 24시간만 풀고 E[끝] ≥ 구간 시작 에너지
+        # (run_rolling 의 rolling48 과 동일). 그 외는 48h 풀고 24h 확정. 운영계획은 이 규칙을
+        # 쓰지 않고 항상 48h 를 푼다 (operating_plan).
         block = frame.iloc[:COMMIT_HOURS] if is_last else frame
-        n_commit = min(COMMIT_HOURS, len(block))
-        final_lo = period_start_energy if is_last else None
-        solved = solve_window(
-            block["generation_mwh"].to_numpy(),
-            block["price_krw_per_mwh"].to_numpy(),
-            block["dt_hours"].to_numpy(),
-            ess,
-            start,
-            final_energy_min_mwh=final_lo,
-            tol=tol,
-        )
-        sl = slice(0, n_commit)
-        committed = block.iloc[sl].copy()
-        committed["sell_mwh"] = solved.sell_mwh[sl]
-        committed["charge_mwh"] = solved.charge_mwh[sl]
-        committed["discharge_mwh"] = solved.discharge_mwh[sl]
-        committed["curtailment_mwh"] = solved.curtailment_mwh[sl]
-        committed["energy_end_mwh"] = solved.energy_end_mwh[sl]
-        committed["soc_end"] = solved.soc_end[sl]
+        terminal = Terminal.period_end_ge_initial(period_start_energy) if is_last else Terminal()
+        plan = plan_window(block, ess, start, commit_hours=COMMIT_HOURS, terminal=terminal, tol=tol)
+        committed = plan.committed.drop(columns="committed")
         committed["window_id"] = window_id
         committed["planning_day"] = window.planning_day
         committed["scenario"] = scenario
         hourly_parts.append(committed)
-
-        price_c = committed["price_krw_per_mwh"].to_numpy()
-        gen_c = committed["generation_mwh"].to_numpy()
-        sales = float(price_c @ solved.sell_mwh[sl])
-        throughput = float(solved.charge_mwh[sl].sum() + solved.discharge_mwh[sl].sum())
-        wear_cost = ess.throughput_cost_krw_per_mwh * throughput
-        final_energy = ess.clip_energy(solved.energy_end_mwh[n_commit - 1])
         daily_rows.append({
-            "window_id": window_id,
-            "planning_day": window.planning_day,
-            "start_ts": committed["ts"].iloc[0],
-            "end_ts": committed["ts"].iloc[-1],
-            "solved_intervals": int(len(block)),
-            "committed_intervals": n_commit,
-            "committed_hours": float(committed["dt_hours"].sum()),
-            "initial_energy_mwh": start,
-            "final_energy_mwh": final_energy,
-            "sales_revenue_krw": sales,
-            "throughput_cost_krw": wear_cost,
-            "objective_krw": sales - wear_cost,
-            "no_ess_same_curtailment_policy_krw": float(np.maximum(price_c, 0) @ gen_c),
-            "generation_mwh": float(gen_c.sum()),
-            "sell_mwh": float(solved.sell_mwh[sl].sum()),
-            "charge_mwh": float(solved.charge_mwh[sl].sum()),
-            "discharge_mwh": float(solved.discharge_mwh[sl].sum()),
-            "curtailment_mwh": float(solved.curtailment_mwh[sl].sum()),
-            "mip_gap": solved.mip_gap,
-            "terminal_constraint": "period_end_ge_initial" if is_last else "none",
+            "window_id": window_id, "planning_day": window.planning_day, **plan.summary_row(),
         })
         sources.append({"planning_day": window.planning_day.isoformat(), **window.sources})
-        start = final_energy
+        start = plan.final_committed_energy_mwh
 
     hourly = pd.concat(hourly_parts, ignore_index=True)
     daily = pd.DataFrame(daily_rows)
@@ -202,8 +167,9 @@ def compare_daily(forecast: list[SegmentResult], actual: list[SegmentResult]) ->
         daily["segment_start"] = prev_final.isna()
         daily["carry_gap_mwh"] = daily["initial_energy_mwh"] - prev_final
         cols = ["planning_day", "segment_id", "segment_start", "initial_energy_mwh",
-                "final_energy_mwh", "carry_gap_mwh", "objective_krw", "generation_mwh",
-                "sell_mwh", "charge_mwh", "discharge_mwh", "curtailment_mwh"]
+                "final_energy_mwh", "carry_gap_mwh", "sales_revenue_krw", "throughput_cost_krw",
+                "objective_krw", "generation_mwh", "sell_mwh", "charge_mwh", "discharge_mwh",
+                "curtailment_mwh"]
         out = daily[cols]
         return out.rename(columns={c: f"{c}_{suffix}" for c in cols if c != "planning_day"})
 

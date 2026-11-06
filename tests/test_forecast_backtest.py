@@ -76,6 +76,36 @@ def test_cli_run_writes_outputs_and_passes_checks(tmp_path):
     assert summary["planned_objective_diff_krw"] == diff
 
 
+def test_days_without_actual_are_compared_out_not_planned_out(tmp_path):
+    """실측이 빠진 날은 두 시나리오 모두 비교에서 빠지고(stage=comparison) 검사는 통과한다."""
+    write_inputs(tmp_path, DAYS)
+    smp = pd.read_csv(tmp_path / "smp.csv")
+    smp.loc[smp["issue_date"] == (DAYS[1] - timedelta(days=1)).isoformat(), "smp_actual"] = None
+    smp.to_csv(tmp_path / "smp.csv", index=False)
+    out = fb.run_forecast_backtest(
+        DAYS[0], DAYS[-1],
+        solar_path=tmp_path / "solar.parquet", wind_path=tmp_path / "wind.parquet",
+        smp_path=tmp_path / "smp.csv", plants_path=tmp_path / "plants.csv",
+        ess_path=tmp_path / "ess.yaml", out_dir=tmp_path / "out", run_id="t2",
+    )
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))
+    assert summary["days"] == 2 and summary["excluded_days"] == 0
+    assert summary["comparison_excluded_days"] == 1
+    assert validation["comparison_all_passed"] and validation["plan_checks_all_passed"]
+    assert validation["data_checks"]["windows_built"] == 3
+    assert validation["data_checks"]["comparable_windows"] == 2
+    excluded = pd.read_csv(out / "excluded_days.csv")
+    assert excluded.to_dict("records") == [
+        {"planning_day": DAYS[1].isoformat(), "reason": "price_actual_missing",
+         "stage": "comparison"},
+    ]
+    daily = pd.read_csv(out / "daily_comparison.csv")
+    assert daily["planning_day"].tolist() == [DAYS[0].isoformat(), DAYS[2].isoformat()]
+    # 가운데 날이 빠졌으니 구간 2개, 둘째 구간도 설정값 SOC 로 시작
+    assert daily["segment_start_forecast"].tolist() == [True, True]
+
+
 def test_cli_main_exits_nonzero_when_checks_fail(tmp_path, monkeypatch, capsys):
     write_inputs(tmp_path, DAYS)
     # 비교 검사 하나를 강제로 실패시켜 종료 코드와 메시지를 확인

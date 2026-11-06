@@ -71,6 +71,16 @@ def test_scenario_uses_only_its_own_inputs():
         fr.run_segment(windows, ESS, "mixed")
 
 
+def test_actual_scenario_rejects_window_without_actual():
+    """실측 없는 창도 forecast 시나리오는 풀리고, actual 시나리오는 사유를 들어 거부한다."""
+    w = make_window(DAYS[0])
+    plan_only = PlanWindow(w.planning_day, w.forecast, None, w.sources,
+                           comparison_reason="generation_actual_missing")
+    assert len(fr.run_segment([plan_only], ESS, "forecast").result.hourly) == 24
+    with pytest.raises(ValueError, match="generation_actual_missing"):
+        fr.run_segment([plan_only], ESS, "actual")
+
+
 def test_committed_totals_only_count_first_24h():
     windows = [make_window(d) for d in DAYS]
     daily = fr.run_segment(windows, ESS, "forecast").result.daily
