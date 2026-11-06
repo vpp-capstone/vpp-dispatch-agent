@@ -87,7 +87,7 @@ def collect(fetch: Fetch, raw_dir: Path, pause: float = 0.3) -> bool:
     """받을 수 있는 만큼 받아 raw_dir/page_0001.json ... 으로 저장한다. 다 받았으면 True."""
     raw_dir.mkdir(parents=True, exist_ok=True)
     meta_path = raw_dir / "meta.json"
-    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
 
     try:
         if "page_size" not in meta:

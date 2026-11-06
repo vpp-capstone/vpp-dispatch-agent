@@ -67,9 +67,11 @@ def test_previous_plan_soc_carries_only_for_consecutive_day(tmp_path):
     write_forecast_only_inputs(tmp_path, DAYS)
     p = paths(tmp_path)
     first = op.run_operating_plan(DAYS[0], run_id="d0", **p)
-    prev_final = json.loads((first / "summary.json").read_text())["committed"]["final_energy_mwh"]
+    prev_final = json.loads((first / "summary.json").read_text(encoding="utf-8"))["committed"][
+        "final_energy_mwh"
+    ]
     second = op.run_operating_plan(DAYS[1], run_id="d1", from_plan=first, **p)
-    start = json.loads((second / "summary.json").read_text())["start_energy"]
+    start = json.loads((second / "summary.json").read_text(encoding="utf-8"))["start_energy"]
     assert start["source"] == "previous_plan"
     assert start["energy_mwh"] == pytest.approx(prev_final)
     assert "계획상" in start["note"]
@@ -107,7 +109,10 @@ def test_cli_matches_function_and_refuses_overwrite(tmp_path, capsys):
 
 def test_degradation_config_overlays_only_cost_fields(tmp_path):
     """화면의 열화비 2택: ESS 파일은 그대로, 열화 3필드만 다른 YAML 에서. 어느 파일도 안 고친다."""
-    before = {p: p.read_text() for p in (Path("config/ess_v0.yaml"), Path("config/ess_v0_1.yaml"))}
+    before = {
+        p: p.read_text(encoding="utf-8")
+        for p in (Path("config/ess_v0.yaml"), Path("config/ess_v0_1.yaml"))
+    }
     ess = op.resolve_ess("config/ess_v0.yaml", "config/ess_v0_1.yaml")
     base = EssParams.from_yaml("config/ess_v0.yaml")
     v01 = EssParams.from_yaml("config/ess_v0_1.yaml")
@@ -115,7 +120,7 @@ def test_degradation_config_overlays_only_cost_fields(tmp_path):
     assert (ess.degradation_model, ess.throughput_basis, ess.throughput_cost_krw_per_mwh) == (
         v01.degradation_model, v01.throughput_basis, v01.throughput_cost_krw_per_mwh)
     assert op.resolve_ess("config/ess_v0.yaml") == base
-    assert {p: p.read_text() for p in before} == before
+    assert {p: p.read_text(encoding="utf-8") for p in before} == before
     write_forecast_only_inputs(tmp_path, DAYS)
     out = op.run_operating_plan(DAYS[1], run_id="deg", degradation_path="config/ess_v0_1.yaml",
                                 **paths(tmp_path))

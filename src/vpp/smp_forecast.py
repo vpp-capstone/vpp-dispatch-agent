@@ -140,9 +140,9 @@ def build_samples(hourly: pd.DataFrame, horizons=HORIZONS, use_fcst: bool = Fals
     kr = holidays.KR(
         years=range(out["target_date"].dt.year.min(), out["target_date"].dt.year.max() + 1)
     )
-    out["dow"] = out["target_date"].dt.dayofweek
+    out["dow"] = out["target_date"].dt.day_of_week
     out["month"] = out["target_date"].dt.month
-    doy = out["target_date"].dt.dayofyear
+    doy = out["target_date"].dt.day_of_year
     out["doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
     out["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
     out["is_holiday"] = out["target_date"].dt.date.map(lambda d: d in kr).astype(int)
