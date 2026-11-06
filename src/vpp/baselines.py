@@ -30,12 +30,11 @@ def _base(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def plan_revenue_krw(plan: pd.DataFrame, ess: EssParams | None = None) -> float:
-    """판매수익 − 열화비 (ess가 None이면 열화비 0)."""
+    """판매수익 − 열화비 (ess가 None이면 열화비 0). 열화비는 ESS 의 열화모델 비용 함수로만 계산."""
     sales = float(plan["price_krw_per_mwh"] @ plan["sell_mwh"])
     if ess is None:
         return sales
-    throughput = float(plan["charge_mwh"].sum() + plan["discharge_mwh"].sum())
-    return sales - ess.throughput_cost_krw_per_mwh * throughput
+    return sales - ess.degradation_cost_krw(plan["charge_mwh"], plan["discharge_mwh"])
 
 
 def no_ess(frame: pd.DataFrame) -> pd.DataFrame:

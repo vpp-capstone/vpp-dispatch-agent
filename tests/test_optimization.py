@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from vpp.optimization import EssParams, run_rolling, solve_window
+from vpp.optimization import EssParams, Terminal, plan_window, run_rolling, solve_window
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -198,6 +198,42 @@ def test_period_final_energy_not_below_initial():
     eq = run_rolling(frame(g, p), ess, policy="equal_initial")
     np.testing.assert_allclose(eq.daily["final_energy_mwh"], eq.daily["initial_energy_mwh"],
                                atol=1e-6)
+
+
+def test_plan_window_commits_first_24h_and_keeps_provisional_rest():
+    """공통 엔진: 48행을 풀고 앞 24행만 확정, 합계는 확정 구간만, 종료 정책은 Terminal 로 전달."""
+    ess = ideal(soc_initial=0.5)
+    g = [1.0] * 48
+    p = [10.0] * 47 + [1_000.0]  # 마지막 시간만 비싸다 → 잠정 구간에서 판다
+    plan = plan_window(frame(g, p), ess, ess.initial_energy_mwh, commit_hours=24)
+    assert len(plan.hourly) == 48 and plan.committed_intervals == 24
+    assert len(plan.committed) == 24 and len(plan.provisional) == 24
+    assert plan.hourly["committed"].tolist() == [True] * 24 + [False] * 24
+    row = plan.summary_row()
+    assert row["solved_intervals"] == 48 and row["committed_intervals"] == 24
+    assert row["terminal_constraint"] == "none"
+    committed_sales = float(plan.committed["price_krw_per_mwh"] @ plan.committed["sell_mwh"])
+    assert row["sales_revenue_krw"] == pytest.approx(committed_sales)
+    assert plan.totals(committed_only=False)["sales_revenue_krw"] > row["sales_revenue_krw"]
+    assert row["final_energy_mwh"] == pytest.approx(plan.committed["energy_end_mwh"].iloc[-1])
+    # 종료 정책: E[끝] ≥ 시작 에너지 를 걸면 마지막에 되돌려 놓는다
+    kept = plan_window(frame(g[:24], [100.0] * 24), ess, 1.0, commit_hours=24,
+                       terminal=Terminal.period_end_ge_initial(1.0))
+    assert kept.final_solved_energy_mwh >= 1.0 - 1e-6
+    assert kept.summary_row()["terminal_constraint"] == "period_end_ge_initial"
+    eq = plan_window(frame(g[:24], [100.0] * 24), ess, 1.0, commit_hours=24,
+                     terminal=Terminal.equal_window_initial(1.0))
+    assert eq.final_solved_energy_mwh == pytest.approx(1.0, abs=1e-6)
+
+
+def test_degradation_cost_helper_matches_model():
+    ess = ideal(throughput_cost_krw_per_mwh=100.0, degradation_model="fixed_throughput",
+                throughput_basis="discharge_only")
+    assert ess.degradation_cost_krw([1.0, 2.0], [3.0, 4.0]) == pytest.approx(700.0)
+    plan = plan_window(frame([1.0] * 4, [10.0, 10.0, 500.0, 500.0]), ess, 0.0, commit_hours=4)
+    t = plan.totals()
+    assert t["throughput_cost_krw"] == pytest.approx(100.0 * t["discharge_mwh"])
+    assert t["objective_krw"] == pytest.approx(t["sales_revenue_krw"] - t["throughput_cost_krw"])
 
 
 def test_yaml_params_are_marked_as_assumption():
