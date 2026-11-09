@@ -54,6 +54,13 @@
 - REC, 입찰 편차 페널티, 실시간 정산, 출력제어 상한은 아직 목적함수·제약에 반영하지 않았다.
 - 열화비와 ESS 사양은 실제 설비 확정값이 아니라 현재 프로젝트 가정값이다.
 
+## 구현 및 검증 상태
+
+- `src/vpp/sensitivity.py`와 `tests/test_sensitivity.py`를 추가했다.
+- 전체 테스트: `pytest -q` 결과 **123 passed**
+- 정적 검사: `ruff check` 통과
+- 패치 형식 검사: `git diff --check` 통과
+
 ## 산출물
 
 - `data/processed/sensitivity/portfolio_2024_06_2025_12_size_degradation/sensitivity_results.csv`
