@@ -9,7 +9,7 @@
 
 ```bash
 python -m vpp.smp_forecast                    # 내일 대상일 2024-06-01 ~ 2025-12-31
-python -m vpp.smp_forecast --weather <기상지표.csv>   # 발전량 담당의 제주 기상 지표를 붙일 때
+python -m vpp.smp_forecast --weather data/processed/weather/jeju_renewable_weather_features.csv
 ```
 
 입력은 `data/processed/market/`의 `market_hourly.csv`, `smp_forecast_hourly.csv`(vpp.market 결과).
@@ -35,6 +35,7 @@ python -m vpp.smp_forecast --weather <기상지표.csv>   # 발전량 담당의 
 
 기상 지표 CSV는 `available_at`, `target_ts`(KST)가 꼭 있어야 한다. 이 두 열과 `issued_at`,
 `lead_hours`, 품질 열(이름에 coverage·capacity·quality·reliab·confidence 포함)을 뺀 숫자 열이 입력이 된다.
+생성 방법과 32개 피처 정의는 [SMP 예측용 제주 기상 피처](smp_weather_features.md)에 정리한다.
 
 ## 모델
 
