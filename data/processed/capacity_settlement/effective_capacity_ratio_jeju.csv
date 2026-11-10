@@ -1,0 +1,37 @@
+application_label,period_start,period_end,month,solar_pct,wind_pct,ess_2h_pct,ess_4h_pct,ess_6h_pct,ess_8h_pct,unit,source_url,notes
+2024/2025,2024-07-01,2025-06-30,1,2.53,22.51,20.67,51.63,71.47,90.00,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,2,2.36,19.01,30.80,60.00,90.00,100.00,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,3,2.12,16.83,30.00,67.38,94.12,100.00,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,4,2.18,21.68,19.77,39.55,58.70,77.47,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,5,4.88,15.48,28.21,55.91,73.85,83.15,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,6,7.10,19.28,30.59,60.57,80.00,90.83,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,7,9.71,15.32,49.07,71.33,100.00,100.00,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,8,10.54,10.68,49.46,73.11,100.00,100.00,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,9,9.28,6.70,48.03,70.00,90.00,100.00,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,10,4.58,10.62,29.13,64.55,85.32,96.10,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,11,3.25,21.84,28.56,57.74,76.33,86.70,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2024/2025,2024-07-01,2025-06-30,12,2.42,24.72,20.00,49.03,68.67,79.24,%,https://kpx.or.kr/boardDownload.es?bid=0209&list_no=73024&seq=1,period label from official notice
+2025/2026,2025-07-01,2026-06-30,1,2.40,28.66,27.75,48.30,65.70,73.41,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,2,2.18,25.60,26.82,47.30,61.00,70.08,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,3,2.05,22.15,30.50,57.02,71.10,78.13,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,4,3.18,9.62,29.13,52.10,66.55,74.02,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,5,5.01,11.92,30.79,58.72,72.88,79.41,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,6,7.75,10.36,29.02,49.62,62.52,70.45,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,7,12.58,17.55,39.23,72.24,85.00,90.71,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,8,13.04,4.83,46.96,76.20,88.28,94.20,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,9,11.35,11.06,44.36,73.07,85.59,91.03,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,10,6.20,17.99,27.47,50.08,62.89,70.21,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,11,3.83,24.27,29.96,53.58,67.61,75.91,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2025/2026,2025-07-01,2026-06-30,12,4.00,29.67,30.53,50.44,66.03,75.44,%,https://new.kpx.or.kr/boardDownload.es?bid=0209&list_no=75568&seq=1,official search result and attachment
+2026/2027,2026-07-01,2027-06-30,1,1.96,22.09,32.34,51.51,71.15,79.10,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,2,2.30,31.37,27.25,50.28,65.67,72.29,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,3,2.46,20.84,33.31,51.96,68.23,75.82,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,4,2.35,14.56,34.64,62.33,77.01,83.15,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,5,4.04,12.67,30.97,55.49,69.69,76.86,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,6,9.00,11.34,38.26,62.09,77.16,83.31,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,7,10.38,11.28,49.56,81.94,94.71,98.25,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,8,9.94,6.79,48.73,78.34,90.44,94.71,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,9,9.21,6.86,44.97,71.68,85.23,91.23,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,10,5.41,13.65,33.71,59.83,75.31,82.76,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,11,2.98,18.93,32.47,54.41,73.87,82.75,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment
+2026/2027,2026-07-01,2027-06-30,12,2.34,22.81,31.63,51.81,69.28,80.06,%,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77678&seq=3,official attachment

@@ -1,0 +1,31 @@
+application_start,application_end,business_name,resource_name,resource_type,rpcf,registration_status,source_url,applicability
+2026-09-01,2027-02-28,두산에너빌리티,두산 제주#1,집합(太/風),1.1034,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,브이피피랩,VPPLAB_AG_01,집합(太),0.9501,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,브이피피랩,VPPLAB_AG_02,집합(太),0.9523,변경,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,수망풍력,수망풍력발전소,개별(風),0.8684,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,에너닷,제주시범1호,집합(太),1.1442,변경,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,에스케이에코플랜트,SKEP0001,집합(太),1.0829,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,에스케이이노베이션,jejuSKENS01,집합(風),1.1136,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,에스케이터닉스가시리풍력발전소,가시리 풍력발전소_입찰,개별(風),0.9297,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,에스플래닛삼십삼호,에스플래닛제주1호태양광,개별(太),0.8786,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,엘에스일렉트릭,LSVPP03,집합(太),1.1238,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,엘지에너지솔루션,LG2601_02,집합(太/風),1.0625,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,엘지에너지솔루션,급전가능재생에너지 VPP#1,집합(太/風),1.1544,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,제주김녕풍력발전,제주김녕풍력,개별(風),0.8888,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,제주에너지공사,JECO집합자원(2026년 하반기),집합(太/風),0.9603,변경,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,제주에너지공사,동복북촌풍력,개별(風),0.9195,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,제주한림해상풍력,급전자원제주한림해상풍력,개별(風),0.8990,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,지에스 풍력발전,GSWP001,집합(風),1.1749,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,케이티,ktgrid06,집합(太),1.1340,변경,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국남동발전,어음풍력,개별(風),1.0012,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국남부발전,제주 VPP #1,집합(太/風),1.0523,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국동서발전,EWP9001,집합(太),0.9706,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국서부발전,WP-JJVPP001,집합(太),1.0421,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국수력원자력,제주#1,집합(太),1.0216,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국중부발전,bKMP001-PV1,집합(太),1.0318,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국중부발전,bKMP001-PV2,집합(太),0.9910,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국중부발전,bKMP001-PV3,집합(太),0.9399,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한국중부발전,bKMP002-SMWT,개별(風),0.9808,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한신에너지,삼달풍력급전가능재생발전기,개별(風),1.0931,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,한화솔루션,QVPP4호,집합(太),1.0727,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
+2026-09-01,2027-02-28,해줌,HV005,집합(太),1.1647,연속 등록,https://www.kpx.or.kr/boardDownload.es?bid=0209&list_no=77995&seq=1,current reference only
