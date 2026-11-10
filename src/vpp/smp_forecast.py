@@ -194,6 +194,9 @@ def build_samples(
     out["target_date"] = out["issue_date"] + pd.to_timedelta(out["horizon"], unit="D")
     out["target_ts"] = out["target_date"] + pd.to_timedelta(out["hour"], unit="h")
 
+    kr = holidays.KR(
+        years=range(out["target_date"].dt.year.min(), out["target_date"].dt.year.max() + 1)
+    )
     out["dow"] = out["target_date"].dt.day_of_week
     out["month"] = out["target_date"].dt.month
     doy = out["target_date"].dt.day_of_year

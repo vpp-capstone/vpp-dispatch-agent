@@ -16,7 +16,7 @@
 | 시장·수요 수집         | `vpp.market`                                                                           | 구현 (PR #1)                                                                  | [data_contract.md](docs/data_contract.md)                                                         |
 | 재생에너지 Target 정제 | `renewable_targets.py`, `build_renewable_history.py`                                   | 구현 (PR #2)                                                                  | [renewable_history.md](docs/renewable_history.md)                                                 |
 | ESS 운영계획 v0        | `optimization.py`, `backtest.py`, `portfolio_data.py`, `validation.py`, `baselines.py` | 구현 (PR #3). 실측을 넣는 완전예측 백테스트. 예측 연결 진행 중                | [formulation.md](docs/formulation.md)                                                             |
-| 발전량 예측 48h        | `generation_forecast/`                                                                 | 구현 (PR #4). 2023 학습·2024 검증까지. 2025 최종 테스트·신규 기간 예측 미구현 | [설계](<docs/generation_forecast_design(11-03).md>) · [결과](docs/generation_forecast_results.md) |
+| 발전량 예측 48h        | `generation_forecast/`                                                                 | 구현. 2023 학습·2024 결합 학습·2025 최종 테스트, LightGBM 및 앙상블 지원      | [설계](<docs/generation_forecast_design(11-03).md>) · [결과](docs/generation_forecast_results.md) |
 | SMP 예측 48h           | `smp_forecast.py`                                                                      | 구현 (PR #5)                                                                  | [smp_forecast.md](docs/smp_forecast.md)                                                           |
 | 수요예측 24h           | `data.py`, `forecast.py`                                                               | 미구현 (`NotImplementedError` 자리만)                                         | —                                                                                                 |
 | 평가·정산              | `evaluation.py` — `evaluate_cost`, `evaluate_forecast`                                 | 미구현. 예측 기반 계획을 실측에 적용한 손익 (다음 단계)                       | —                                                                                                 |
@@ -62,9 +62,9 @@ Git에 들어 있는 데이터는 `data/reference/`와 `data/sample/`뿐이다. 
 
 | 받는 곳     | 파일                                                                          | 넣는 위치                             |
 | ----------- | ----------------------------------------------------------------------------- | ------------------------------------- |
-| 발전량 담당 | `solar_validation_predictions.parquet`, `wind_validation_predictions.parquet` | `artifacts/predictions/`              |
-| 발전량 담당 | `solar_lightgbm.joblib`, `wind_lightgbm.joblib`                               | `artifacts/models/`                   |
-| 발전량 담당 | `generation_model_metrics.csv` 등 지표·`training_summary.json`                | `data/processed/generation_forecast/` |
+| 발전량 담당 | `*_validation_predictions.parquet`, `*_test_predictions.parquet`, `*_ensemble_*_predictions.parquet` | `artifacts/predictions/`              |
+| 발전량 담당 | `*_lightgbm.joblib`, `*_ensemble.joblib`                                                         | `artifacts/models/`                   |
+| 발전량 담당 | `generation_model_metrics.csv`, `generation_ensemble_metrics.csv` 등 지표·요약                    | `data/processed/generation_forecast/` |
 | SMP 담당    | `smp_forecast.csv` (`smp_metrics.csv`)                                        | `data/processed/forecast/`            |
 
 **3. 해당 모듈을 직접 돌릴 때만**
@@ -117,6 +117,17 @@ src/vpp/
     weather_quality.py       일별 GFS 6격자·48시간 품질검사
     dataset.py               발전량 정제 및 GFS 결합 학습마트 생성
     model.py                 기준 모델·LightGBM 학습 및 평가
+    tune_lightgbm.py         2023~2024 전용 시간순 LightGBM 튜닝
+    audit_labels.py          발전량 결측·이상 출력 진단
+    improvement.py           태양광·포트폴리오 개선 피처
+    tune_solar_improvements.py 태양광 개선 후보 비교
+    wind_hybrid.py           풍력 파워커브·잔차 LightGBM 구성요소
+    tune_wind_hybrid.py      풍력 변화량·하이브리드 모델 비교
+    tune_wind_improvements.py 풍력 궤적·격자 피처 비교
+    tune_oof_ensemble.py     2023 OOF 가중치 학습·2024 평가
+    improved_model.py        최종 OOF 앙상블 재학습·추론
+    ensemble.py              Weighted Ensemble·Stacking 학습 및 평가
+  smp_weather_features.py    GFS 6격자 → SMP 전달용 제주 기상 피처 집계
   market/                    수요·SMP·출력제어 원본 수집 및 통합
   smp_forecast.py            제주 하루전 SMP 48시간 예측 (docs/smp_forecast.md)
   renewable_targets.py       재생에너지 Target 후보 정제
@@ -157,7 +168,8 @@ docs/
   generation_asset_validation.md  발전소 21개소 데이터 점검 결과
   generation_forecast_design(11-03).md  발전량 예측 설계
   GITHUB_REPO_HANDOFF.md      발전량 예측 코드 이전 인수인계
-  generation_forecast_results.md  발전량 모델 2024 검증 결과 (지표 원본은 data/processed/generation_forecast/)
+  generation_forecast_results.md  발전량 모델 2024 결합 학습·2025 최종 테스트 결과
+  smp_weather_features.md     SMP 전달용 제주 기상 피처 계약·생성 방법
 
 api/main.py                  FastAPI 진입점
 dashboard/app.py             Streamlit 대시보드
