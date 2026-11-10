@@ -161,3 +161,61 @@ def test_output_uses_generation_forecast_column_names():
     expected = (out["target_time"] - out["issue_time"]) / pd.Timedelta(hours=1)
     assert (out["lead_hour"] == expected).all()
     assert (out["issue_time"].dt.hour == 11).all()
+
+
+def test_new_features_use_only_published_prices():
+    s = sf.build_samples(make_hourly(), horizons=(1,)).set_index(["issue_date", "hour"])
+    row = s.loc[(pd.Timestamp("2024-01-20"), 13)]  # 토요일(날짜 번호 19) 11시 발행, 대상 일요일
+
+    assert row["p_med3"] == code(18, 13)  # 19·18·17일의 중앙값
+    assert row["p_med7"] == code(16, 13)  # 19~13일의 중앙값
+    assert row["p_sametype"] == code(13, 13)  # 대상이 일요일 → 가장 최근 일요일(1/14)
+    for c in sf.EXTRA_FEATURES:
+        assert c in s.columns
+
+
+def test_issue_at_18_uses_next_day_price_but_not_newer_demand():
+    s = sf.build_samples(make_hourly(), horizons=(2,), issue_hour=18).set_index(
+        ["issue_date", "hour"]
+    )
+    issue = pd.Timestamp("2024-01-20")  # 날짜 번호 19, 18시엔 20번(1/21) 가격이 공표됨
+    row = s.loc[(issue, 13)]
+
+    assert row["issue_ts"] == issue + pd.Timedelta(hours=18)
+    assert row["y"] == code(21, 13)  # 대상: 모레(1/22)
+    assert row["p_last"] == code(20, 13)  # 막 공표된 내일 가격 = B1
+    assert row["p_last2"] == code(19, 13)
+    assert row["p_last_max"] == code(20, 23)
+    assert row["p_med3"] == code(19, 13)
+    assert row["p_sametype"] == code(18, 13)  # 대상 월요일 → 공표된 날 중 가장 최근 평일(1/19)
+    assert row["demand_prev"] == 10_000 + code(18, 13)  # 수요는 11시와 같이 발행 전날까지
+
+    with pytest.raises(ValueError):
+        sf.build_samples(make_hourly(), horizons=(1,), issue_hour=18)  # 내일은 이미 공표
+
+
+def test_forecast_at_18_fills_tomorrow_with_published_price():
+    hourly = make_hourly(days=60)
+    pred = sf.forecast(hourly, "2024-02-10", "2024-02-12", issue_hour=18)
+    out = sf.to_output(pred)
+
+    for _, g in out.groupby("issue_date"):
+        assert len(g) == 48
+        assert g["lead_hour"].tolist() == list(range(6, 54))
+    tomorrow = out[out["horizon"] == 1]
+    assert (tomorrow["smp_hat"] == tomorrow["smp_actual"]).all()
+    assert (out["issue_time"].dt.hour == 18).all()
+
+
+def test_price_variants_only_swap_the_price():
+    hourly = make_hourly(days=60)
+    out = sf.to_output(sf.forecast(hourly, "2024-02-10", "2024-02-11"))
+
+    b1, actual = sf.price_variant(out, "b1"), sf.price_variant(out, "actual")
+    assert (b1["smp_hat"] == out["smp_b1"]).all()
+    assert (actual["smp_hat"] == out["smp_actual"]).all()
+    assert (actual["smp_hat_krw_per_mwh"] == out["smp_actual"] * 1000).all()
+    keep = ["issue_date", "target_time", "lead_hour", "smp_actual"]
+    assert b1[keep].equals(out[keep])
+    with pytest.raises(ValueError):
+        sf.price_variant(out, "oracle")
