@@ -1,0 +1,6 @@
+period_label,period_start,period_end,region,rcp_krw_per_kwh,unit,source_url,applicability
+2023/2024,2023-07-01,2024-06-30,제주,22.05,원/kWh,https://kpx.or.kr/boardDownload.es?bid=0080&list_no=69918&seq=1,2024-06 backtest
+2024/2025,2024-07-01,2025-06-30,제주,22.05,원/kWh,https://kpx.or.kr/boardDownload.es?bid=0080&list_no=72873&seq=1,2024-07 to 2025-06 backtest
+2025/2026_initial,2025-07-01,2025-11-14,제주,22.05,원/kWh,https://kpx.or.kr/boardDownload.es?bid=0080&list_no=75433&seq=1,2025-07 to 2025-11-14 backtest
+2025/2026_revision,2025-11-15,2026-06-30,제주,22.05,원/kWh,https://kpx.or.kr/boardDownload.es?bid=0080&list_no=76286&seq=2,2025-11-15 onward
+2026/2027,2026-07-01,2027-06-30,제주,22.05,원/kWh,https://kpx.or.kr/boardDownload.es?bid=0080&list_no=77709&seq=2,current reference
