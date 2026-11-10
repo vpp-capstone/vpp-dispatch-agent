@@ -1,7 +1,6 @@
 import unittest
 from datetime import date
 
-import numpy as np
 import pandas as pd
 
 from vpp.generation_forecast.dataset import solar_elevation_deg

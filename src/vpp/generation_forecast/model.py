@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,14 @@ DEFAULT_REPORTS = RESULTS_DIR
 TARGET = "capacity_factor"
 RANDOM_SEED = 42
 
+WIND_CHANGE_FEATURES = [
+    "wind_speed_change_1h_ms",
+    "wind_speed_change_3h_ms",
+    "wind_direction_change_1h_sin",
+    "wind_direction_change_1h_cos",
+    "wind_direction_change_3h_sin",
+    "wind_direction_change_3h_cos",
+]
 
 FEATURES = {
     "solar": [
@@ -55,9 +62,15 @@ FEATURES = {
         "wind_direction_cos",
         "temperature_2m_c",
         "total_cloud_cover_pct",
+        *WIND_CHANGE_FEATURES,
     ],
 }
 CATEGORICAL_FEATURES = ["asset_code", "grid_code"]
+MODEL_CONFIGS: dict[str, dict[str, Any]] = {
+    # Selected using 2023-2024 walk-forward folds and the full 2024 validation period.
+    "solar": {"weight_mode": "sqrt_capacity", "params": {}},
+    "wind": {"weight_mode": "none", "params": {}},
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,9 +84,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def add_wind_change_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add forecast-trajectory changes without crossing issue-time boundaries."""
+    original_index = frame.index
+    ordered = frame.sort_values(["asset_id", "issue_time_utc", "lead_hour"]).copy()
+    group_keys = [ordered["asset_id"], ordered["issue_time_utc"]]
+    groups = ordered.groupby(group_keys, observed=True, sort=False)
+    direction = np.deg2rad(ordered["wind_direction_80m_deg"].to_numpy(dtype=float))
+    for hours in (1, 3):
+        previous_speed = groups["wind_speed_80m_ms"].shift(hours)
+        previous_lead = groups["lead_hour"].shift(hours)
+        exact_interval = ordered["lead_hour"].sub(previous_lead).eq(hours)
+        speed_change = ordered["wind_speed_80m_ms"] - previous_speed
+        ordered[f"wind_speed_change_{hours}h_ms"] = speed_change.where(exact_interval, 0.0)
+        previous_direction = (
+            pd.Series(direction, index=ordered.index)
+            .groupby(group_keys, observed=True, sort=False)
+            .shift(hours)
+        )
+        delta = np.arctan2(
+            np.sin(direction - previous_direction.to_numpy(dtype=float)),
+            np.cos(direction - previous_direction.to_numpy(dtype=float)),
+        )
+        missing = (~exact_interval | previous_direction.isna()).to_numpy()
+        ordered[f"wind_direction_change_{hours}h_sin"] = np.where(missing, 0.0, np.sin(delta))
+        ordered[f"wind_direction_change_{hours}h_cos"] = np.where(missing, 1.0, np.cos(delta))
+    return ordered.loc[original_index]
+
+
 def prepare_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, dict[str, int]]]:
     result = frame[frame["label_is_valid"]].copy()
-    result = result[result["dataset_split"].isin(["train", "validation"])].copy()
+    result = result[result["dataset_split"].isin(["train", "validation", "test"])].copy()
     category_maps: dict[str, dict[str, int]] = {}
     for source, target in [("asset_id", "asset_code"), ("gfs_grid_id", "grid_code")]:
         values = sorted(result[source].astype(str).unique())
@@ -84,6 +125,7 @@ def prepare_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, dict[str
         radians = np.deg2rad(result["wind_direction_80m_deg"])
         result["wind_direction_sin"] = np.sin(radians)
         result["wind_direction_cos"] = np.cos(radians)
+        result = add_wind_change_features(result)
     if "is_daylight" in result:
         result["is_daylight"] = result["is_daylight"].astype("int8")
     return result, category_maps
@@ -104,32 +146,48 @@ def climatology_prediction(train: pd.DataFrame, validation: pd.DataFrame) -> np.
     missing = np.isnan(prediction)
     if missing.any():
         by_asset = train.groupby("asset_id", observed=True)[TARGET].mean()
-        prediction[missing] = validation.loc[missing, "asset_id"].map(by_asset).to_numpy(dtype=float)
+        prediction[missing] = (
+            validation.loc[missing, "asset_id"].map(by_asset).to_numpy(dtype=float)
+        )
     if np.isnan(prediction).any():
         prediction[np.isnan(prediction)] = float(train[TARGET].mean())
     return np.clip(prediction, 0.0, 1.0)
 
 
-def make_model(estimators: int) -> Any:
+def make_model(estimators: int, **overrides: Any) -> Any:
     import lightgbm as lgb
 
-    return lgb.LGBMRegressor(
-        objective="regression_l1",
-        n_estimators=estimators,
-        learning_rate=0.03,
-        num_leaves=31,
-        min_child_samples=100,
-        subsample=0.9,
-        subsample_freq=1,
-        colsample_bytree=0.9,
-        reg_alpha=0.1,
-        reg_lambda=0.2,
-        random_state=RANDOM_SEED,
-        n_jobs=-1,
-        verbosity=-1,
-        deterministic=True,
-        force_col_wise=True,
-    )
+    params = {
+        "objective": "regression_l1",
+        "n_estimators": estimators,
+        "learning_rate": 0.03,
+        "num_leaves": 31,
+        "min_child_samples": 100,
+        "subsample": 0.9,
+        "subsample_freq": 1,
+        "colsample_bytree": 0.9,
+        "reg_alpha": 0.1,
+        "reg_lambda": 0.2,
+        "random_state": RANDOM_SEED,
+        "n_jobs": -1,
+        "verbosity": -1,
+        "deterministic": True,
+        "force_col_wise": True,
+    }
+    params.update(overrides)
+    return lgb.LGBMRegressor(**params)
+
+
+def training_sample_weights(frame: pd.DataFrame, mode: str) -> np.ndarray | None:
+    """Return label-safe training weights aligned with the portfolio objective."""
+    if mode == "none":
+        return None
+    capacity = frame["capacity_kw"].to_numpy(dtype=float)
+    if mode == "capacity":
+        return capacity
+    if mode == "sqrt_capacity":
+        return np.sqrt(capacity)
+    raise ValueError(f"unknown weight mode: {mode}")
 
 
 def enforce_physics(energy_type: str, frame: pd.DataFrame, prediction: np.ndarray) -> np.ndarray:
@@ -140,7 +198,9 @@ def enforce_physics(energy_type: str, frame: pd.DataFrame, prediction: np.ndarra
     return result
 
 
-def error_metrics(actual_kwh: np.ndarray, predicted_kwh: np.ndarray, capacity_kw: np.ndarray) -> dict:
+def error_metrics(
+    actual_kwh: np.ndarray, predicted_kwh: np.ndarray, capacity_kw: np.ndarray
+) -> dict:
     error = predicted_kwh - actual_kwh
     return {
         "observations": int(len(error)),
@@ -231,6 +291,51 @@ def asset_metrics(frame: pd.DataFrame, prediction_column: str, model_name: str) 
     return pd.DataFrame(rows)
 
 
+def add_model_predictions(
+    energy_type: str,
+    frame: pd.DataFrame,
+    model: Any,
+    features: list[str],
+    train_for_baseline: pd.DataFrame,
+) -> pd.DataFrame:
+    result = frame.copy()
+    result["baseline_capacity_factor"] = enforce_physics(
+        energy_type, result, climatology_prediction(train_for_baseline, result)
+    )
+    result["lightgbm_capacity_factor"] = enforce_physics(
+        energy_type,
+        result,
+        model.predict(result[features], num_iteration=model.best_iteration_),
+    )
+    for name in ["baseline", "lightgbm"]:
+        result[f"{name}_generation_kwh"] = result[f"{name}_capacity_factor"] * result["capacity_kw"]
+    return result
+
+
+def prediction_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "asset_id",
+        "plant_name",
+        "energy_type",
+        "capacity_kw",
+        "gfs_grid_id",
+        "issue_time_utc",
+        "issue_time_kst",
+        "valid_time_utc",
+        "valid_time_kst",
+        "lead_hour",
+        "forecast_day_offset",
+        "dataset_split",
+        "generation_kwh",
+        "capacity_factor",
+        "baseline_capacity_factor",
+        "baseline_generation_kwh",
+        "lightgbm_capacity_factor",
+        "lightgbm_generation_kwh",
+    ]
+    return frame[columns].sort_values(["issue_time_utc", "valid_time_utc", "asset_id"])
+
+
 def train_one(
     energy_type: str,
     data_path: Path,
@@ -247,19 +352,19 @@ def train_one(
     frame, category_maps = prepare_frame(raw)
     train = frame[frame["dataset_split"].eq("train")].copy()
     validation = frame[frame["dataset_split"].eq("validation")].copy()
-    if train.empty or validation.empty:
-        raise ValueError(f"{energy_type}: train or validation split is empty")
+    test = frame[frame["dataset_split"].eq("test")].copy()
+    if train.empty or validation.empty or test.empty:
+        raise ValueError(f"{energy_type}: train, validation, or test split is empty")
     features = FEATURES[energy_type]
-    if train[features].isna().any().any() or validation[features].isna().any().any():
+    if any(part[features].isna().any().any() for part in (train, validation, test)):
         raise ValueError(f"{energy_type}: feature matrix contains missing values")
 
-    validation["baseline_capacity_factor"] = enforce_physics(
-        energy_type, validation, climatology_prediction(train, validation)
-    )
-    model = make_model(estimators)
-    model.fit(
+    config = MODEL_CONFIGS[energy_type]
+    selection_model = make_model(estimators, **config["params"])
+    selection_model.fit(
         train[features],
         train[TARGET],
+        sample_weight=training_sample_weights(train, config["weight_mode"]),
         categorical_feature=CATEGORICAL_FEATURES,
         eval_X=validation[features],
         eval_y=validation[TARGET],
@@ -269,63 +374,42 @@ def train_one(
             lgb.log_evaluation(period=100),
         ],
     )
-    validation["lightgbm_capacity_factor"] = enforce_physics(
-        energy_type,
-        validation,
-        model.predict(validation[features], num_iteration=model.best_iteration_),
-    )
-    for name in ["baseline", "lightgbm"]:
-        validation[f"{name}_generation_kwh"] = (
-            validation[f"{name}_capacity_factor"] * validation["capacity_kw"]
-        )
+    validation = add_model_predictions(energy_type, validation, selection_model, features, train)
+    # The 2025 test prediction is made before any 2025 result is used for model changes.
+    test = add_model_predictions(energy_type, test, selection_model, features, train)
 
     expected_assets = int(validation["asset_id"].nunique())
     metrics: list[dict] = []
     assets: list[pd.DataFrame] = []
-    for name in ["baseline", "lightgbm"]:
-        prediction = f"{name}_generation_kwh"
-        metrics.extend(metric_rows(validation, prediction, name, energy_type, expected_assets))
-        assets.append(asset_metrics(validation, prediction, name))
+    for split_name, evaluated in [("validation", validation), ("test", test)]:
+        for name in ["baseline", "lightgbm"]:
+            prediction = f"{name}_generation_kwh"
+            split_metrics = metric_rows(evaluated, prediction, name, energy_type, expected_assets)
+            for row in split_metrics:
+                row["dataset_split"] = split_name
+            metrics.extend(split_metrics)
+            asset_frame = asset_metrics(evaluated, prediction, name)
+            asset_frame["dataset_split"] = split_name
+            assets.append(asset_frame)
+        prediction_frame(evaluated).to_parquet(
+            prediction_dir / f"{energy_type}_{split_name}_predictions.parquet",
+            index=False,
+            compression="zstd",
+        )
 
-    prediction_columns = [
-        "asset_id",
-        "plant_name",
-        "energy_type",
-        "capacity_kw",
-        "gfs_grid_id",
-        "issue_time_utc",
-        "issue_time_kst",
-        "valid_time_utc",
-        "valid_time_kst",
-        "lead_hour",
-        "forecast_day_offset",
-        "generation_kwh",
-        "capacity_factor",
-        "baseline_capacity_factor",
-        "baseline_generation_kwh",
-        "lightgbm_capacity_factor",
-        "lightgbm_generation_kwh",
-    ]
-    predictions = validation[prediction_columns].sort_values(
-        ["issue_time_utc", "valid_time_utc", "asset_id"]
-    )
-    predictions.to_parquet(
-        prediction_dir / f"{energy_type}_validation_predictions.parquet",
-        index=False,
-        compression="zstd",
-    )
     importance = pd.DataFrame(
         {
             "feature": features,
-            "gain": model.booster_.feature_importance(importance_type="gain"),
-            "split": model.booster_.feature_importance(importance_type="split"),
+            "gain": selection_model.booster_.feature_importance(importance_type="gain"),
+            "split": selection_model.booster_.feature_importance(importance_type="split"),
         }
     ).sort_values("gain", ascending=False)
     importance.to_csv(
         report_dir / f"{energy_type}_feature_importance.csv", index=False, encoding="utf-8-sig"
     )
-    bundle = {
-        "model": model,
+    best_iteration = int(selection_model.best_iteration_)
+    selection_bundle = {
+        "model": selection_model,
         "energy_type": energy_type,
         "features": features,
         "categorical_features": CATEGORICAL_FEATURES,
@@ -333,20 +417,53 @@ def train_one(
         "target": TARGET,
         "clip_range": [0.0, 1.0],
         "solar_night_zero_rule": energy_type == "solar",
+        "training_split": "2023",
+        "selection_split": "2024",
+        "final_test_split": "2025",
     }
-    joblib.dump(bundle, model_dir / f"{energy_type}_lightgbm.joblib")
+    joblib.dump(selection_bundle, model_dir / f"{energy_type}_lightgbm_selection.joblib")
+
+    # Only after the locked 2025 prediction has been produced, refit the operational model
+    # on 2023-2024 with the iteration count selected exclusively on 2024.
+    development = pd.concat([train, validation], ignore_index=True)
+    production_model = make_model(best_iteration, **config["params"])
+    production_model.fit(
+        development[features],
+        development[TARGET],
+        sample_weight=training_sample_weights(development, config["weight_mode"]),
+        categorical_feature=CATEGORICAL_FEATURES,
+        callbacks=[lgb.log_evaluation(period=0)],
+    )
+    production_bundle = {
+        **selection_bundle,
+        "model": production_model,
+        "best_iteration": best_iteration,
+        "training_split": "2023-2024",
+        "selection_model_path": f"{energy_type}_lightgbm_selection.joblib",
+    }
+    joblib.dump(production_bundle, model_dir / f"{energy_type}_lightgbm.joblib")
+
     metadata = {
         "energy_type": energy_type,
         "train_rows": int(len(train)),
         "validation_rows": int(len(validation)),
+        "test_rows": int(len(test)),
         "train_valid_time_start": train["valid_time_kst"].min().isoformat(),
         "train_valid_time_end": train["valid_time_kst"].max().isoformat(),
         "validation_valid_time_start": validation["valid_time_kst"].min().isoformat(),
         "validation_valid_time_end": validation["valid_time_kst"].max().isoformat(),
+        "test_valid_time_start": test["valid_time_kst"].min().isoformat(),
+        "test_valid_time_end": test["valid_time_kst"].max().isoformat(),
         "assets": expected_assets,
         "features": features,
-        "best_iteration": int(model.best_iteration_),
-        "best_validation_l1": float(model.best_score_["valid_0"]["l1"]),
+        "best_iteration": best_iteration,
+        "best_validation_l1": float(selection_model.best_score_["valid_0"]["l1"]),
+        "final_test_was_predicted_before_production_refit": True,
+        "production_training_years": [2023, 2024],
+        "weight_mode": config["weight_mode"],
+        "tuned_params": config["params"],
+        "tuning_years": [2023, 2024],
+        "locked_test_used_for_tuning": False,
     }
     return metrics, pd.concat(assets, ignore_index=True), metadata
 
@@ -382,6 +499,8 @@ def main() -> None:
         "random_seed": RANDOM_SEED,
         "split_rule": "valid_time year: 2023=train, 2024=validation, 2025=test",
         "validation_is_for_model_selection_not_final_test": True,
+        "test_is_locked_2025_evaluation": True,
+        "production_refit_uses_2023_2024_only": True,
         "models": metadata,
         "metrics": metric_frame.to_dict("records"),
     }
