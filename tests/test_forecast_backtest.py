@@ -114,6 +114,51 @@ def test_rec_config_splits_revenue_and_applies_to_both_scenarios(tmp_path):
     assert delta_no_ess == pytest.approx(70000 * gen)
 
 
+def test_execution_outputs_keep_three_revenue_concepts_apart(tmp_path):
+    """실측이 있으면 실행 운전·정산 결과가 붙고, 예상/실행/완전예측 수익이 따로 저장된다."""
+    write_inputs(tmp_path, DAYS)
+    rec_yaml = tmp_path / "rec.yaml"
+    rec_yaml.write_text(yaml.safe_dump({"weight": 1.0, "price_krw_per_rec": 70000}),
+                        encoding="utf-8")
+    out = fb.run_forecast_backtest(
+        DAYS[0], DAYS[-1], rec_path=rec_yaml, terminal_comparison=True,
+        solar_path=tmp_path / "solar.parquet", wind_path=tmp_path / "wind.parquet",
+        smp_path=tmp_path / "smp.csv", plants_path=tmp_path / "plants.csv",
+        ess_path=tmp_path / "ess.yaml", out_dir=tmp_path / "out", run_id="x",
+    )
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))
+    assert validation["execution_checks_all_passed"] and validation["plan_checks_all_passed"]
+    exe = summary["execution"]
+    assert exe["available"] and exe["basis"] == "assumed_actual_smp"
+    assert set(exe["scenarios"]) == {"executed", "legacy_plan_executed", "no_ess_executed"}
+    assert set(summary["revenue_concepts"]) == {"planned_forecast", "executed",
+                                                "perfect_foresight"}
+    planned = summary["scenarios"]["forecast"]["planned_objective_krw"]
+    realized = exe["scenarios"]["executed"]["realized_net_krw"]
+    perfect = summary["scenarios"]["actual"]["planned_objective_krw"]
+    assert len({round(planned), round(realized), round(perfect)}) == 3
+    hourly = pd.read_csv(out / "hourly_execution.csv")
+    daily = pd.read_csv(out / "daily_execution.csv")
+    assert set(hourly["scenario"]) == set(exe["scenarios"]) and len(hourly) == 3 * 72
+    assert {"committed_sell_mwh", "supply_mwh", "shortfall_mwh", "surplus_mwh",
+            "realized_net_krw", "settlement_basis"} <= set(hourly.columns)
+    assert daily.loc[daily.scenario == "executed", "segment_start"].tolist() == [
+        True, False, False,
+    ]
+    # 실행 종료 SOC 가 다음 날 시작 SOC 로 이어진다 (계획 종료 SOC 와 따로 저장)
+    d = daily[daily.scenario == "executed"]
+    assert d["exec_start_energy_mwh"].iloc[1:].tolist() == pytest.approx(
+        d["executed_final_energy_mwh"].iloc[:-1].tolist())
+    assert "planned_final_energy_mwh" in d
+    assert exe["last_executed_day"] == str(DAYS[-1])
+    table = pd.read_csv(out / "terminal_policy_comparison.csv")
+    assert len(table) == 4 and "executed_end_shortfall_mwh" in table
+    # ESS 미사용 기준은 배터리를 쓰지 않는다
+    base = hourly[hourly.scenario == "no_ess_executed"]
+    assert base[["charge_mwh", "discharge_mwh"]].abs().to_numpy().max() == 0
+
+
 def test_period_without_any_actual_still_produces_forecast_plan(tmp_path):
     """실측이 하나도 없는 기간(운영자의 기본 상황): 비교 없이 예측 계획만 만들고 그렇게 표시한다."""
     write_inputs(tmp_path, DAYS)
@@ -132,6 +177,8 @@ def test_period_without_any_actual_still_produces_forecast_plan(tmp_path):
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))
     assert summary["actual_available"] is False
+    assert summary["execution"]["available"] is False  # 예측값으로 대체해 정산하지 않는다
+    assert not (out / "hourly_execution.csv").exists()
     assert summary["days"] == len(DAYS) and "actual" not in summary["scenarios"]
     assert summary["planned_objective_diff_krw"] is None
     assert validation["plan_checks_all_passed"] and validation["comparison_all_passed"]
