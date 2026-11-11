@@ -117,8 +117,12 @@ def model_cards(release):
 
 def show_forecasts(data, day, release):
     st.subheader("예측은 실제와 얼마나 달랐나요?")
-    st.caption("재생을 누르면 예측선과 실측선을 같은 시간으로 따라갑니다.")
     model_cards(release)
+    if data["actual"] is None:
+        st.info("실측이 없어 비교할 수 없습니다. 발전량 parquet 의 generation_kwh 열과 SMP 파일의 "
+                "smp_actual 열이 채워지면 이 화면이 켜집니다.")
+        return
+    st.caption("재생을 누르면 예측선과 실측선을 같은 시간으로 따라갑니다.")
     choice = st.radio(
         "비교할 예측",
         ["전체 발전량", "태양광", "풍력", "SMP 가격"],
@@ -186,26 +190,35 @@ def show_forecasts(data, day, release):
 
 def show_profit(data, day):
     st.subheader("판매 수익에서 무엇이 더해지고 빠졌나요?")
+    has_actual = data["actual"] is not None
     replay = replay_payload(data, day)
-    rows = [
-        {"hour": f["hour"], "f": f["cumulative"] / 10000, "a": a["cumulative"] / 10000}
-        for f, a in zip(replay["series"]["forecast"], replay["series"]["actual"], strict=True)
-    ]
-    render_signal(
-        rows,
-        title="하루 누적 계획 수익",
-        day=day,
-        unit="만 원",
-        kind="revenue",
-        forecast_label="예측이 맞았다고 가정",
-        actual_label="실측을 미리 알고 계획",
-    )
-    mode = st.radio(
-        "전체 기간 수익 기준",
-        ["실측을 미리 알고 계획", "예측이 맞았다고 가정"],
-        horizontal=True,
-        key="oc_revenue_mode",
-    )
+    if has_actual:
+        rows = [
+            {"hour": f["hour"], "f": f["cumulative"] / 10000, "a": a["cumulative"] / 10000}
+            for f, a in zip(replay["series"]["forecast"], replay["series"]["actual"],
+                            strict=True)
+        ]
+        render_signal(
+            rows,
+            title="하루 누적 계획 수익",
+            day=day,
+            unit="만 원",
+            kind="revenue",
+            forecast_label="예측이 맞았다고 가정",
+            actual_label="실측을 미리 알고 계획",
+        )
+        mode = st.radio(
+            "전체 기간 수익 기준",
+            ["실측을 미리 알고 계획", "예측이 맞았다고 가정"],
+            horizontal=True,
+            key="oc_revenue_mode",
+        )
+    else:
+        series = replay["series"]["forecast"]
+        st.caption(f"{day} 하루 누적 계획 수익(예측 기준) · 마지막 시각 "
+                   f"{series[-1]['cumulative'] / 10000:,.1f}만 원. "
+                   "실측 비교는 실측이 들어오면 표시.")
+        mode = "예측이 맞았다고 가정"
     rev = data["revenues"]["actual" if mode.startswith("실측") else "forecast"]
     kpis(
         [
@@ -352,13 +365,8 @@ def render():
         f"계산 {pd.Timestamp(release['created_at']).tz_convert('Asia/Seoul'):%m/%d %H:%M} KST"
     )
     if not release.get("backtest"):
-        st.info(
-            "실측이 없어 예측 비교와 실측 기준 수익은 계산하지 않았습니다. "
-            "예측 운영계획은 생성됐습니다."
-        )
-        st.dataframe(
-            pd.read_csv(Path(release["plan"]) / "plan_48h.csv"), hide_index=True, width="stretch"
-        )
+        st.info("예측 창이 없어 운영계획을 만들지 못했습니다. "
+                "실행 상태에서 입력 파일을 확인하세요.")
         return
     folder = Path(release["backtest"])
     try:
@@ -366,6 +374,12 @@ def render():
     except (ValueError, OSError) as exc:
         st.error(f"저장 결과 검증 실패: {exc}")
         return
+    has_actual = data["actual"] is not None
+    if not has_actual:
+        st.info(
+            "이 기간은 실측이 아직 없습니다. 예측으로 세운 운영계획과 계획 수익만 보여주고, "
+            "예측 비교와 실측 기준 수익은 실측 파일이 들어오면 같은 자리에 채워집니다."
+        )
     days = sorted(data["forecast"].ts.dt.date.unique())
     if st.session_state.get("operator_day") not in days:
         st.session_state["operator_day"] = days[0]
@@ -405,19 +419,33 @@ def render():
             st.dataframe(pd.read_csv(Path(release["plan"]) / "plan_48h.csv"), hide_index=True)
     else:
         st.subheader("오늘의 흐름을 한 번에 확인하세요")
-        m, rev = data["metrics"], data["revenues"]["actual"]
-        kpis(
-            [
-                (
-                    "발전량 평균 오차",
-                    f"{m['generation_mae_mwh']:.2f} MWh",
-                    "전체 비교 기간 · 시간당",
-                ),
-                ("SMP 평균 오차", f"{m['smp_mae_krw_per_kwh']:.2f}원/kWh", "전체 비교 기간"),
-                ("ESS 추가수익", money(rev["ess_gain_krw"]), "기간 전체 · 실측을 미리 안 경우"),
-                ("실제 실행 수익", "미계산", "계획 고정 후 오차 대응 필요"),
-            ]
-        )
+        m = data["metrics"]
+        if has_actual:
+            rev = data["revenues"]["actual"]
+            kpis(
+                [
+                    (
+                        "발전량 평균 오차",
+                        f"{m['generation_mae_mwh']:.2f} MWh",
+                        "전체 비교 기간 · 시간당",
+                    ),
+                    ("SMP 평균 오차", f"{m['smp_mae_krw_per_kwh']:.2f}원/kWh", "전체 비교 기간"),
+                    ("ESS 추가수익", money(rev["ess_gain_krw"]), "기간 전체 · 실측을 미리 안 경우"),
+                    ("실제 실행 수익", "미계산", "계획 고정 후 오차 대응 필요"),
+                ]
+            )
+        else:
+            rev = data["revenues"]["forecast"]
+            kpis(
+                [
+                    ("계획 수익 (예측 기준)", money(rev["net_revenue_krw"]),
+                     f"{m['days']}일 · SMP + REC − 열화비"),
+                    ("ESS 추가수익 (예측 기준)", money(rev["ess_gain_krw"]),
+                     "같은 예측으로 ESS 없이 팔 때와의 차이"),
+                    ("예측 오차", "실측 없음", "실측 파일이 들어오면 표시"),
+                    ("실제 실행 수익", "미계산", "계획 고정 후 오차 대응 필요"),
+                ]
+            )
         st.write("")
         render_simulator(data, day)
         flow(state)

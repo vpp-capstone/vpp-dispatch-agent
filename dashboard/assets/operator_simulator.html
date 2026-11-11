@@ -61,6 +61,7 @@
 const data=JSON.parse(document.getElementById('replay-data').textContent);
 const $=id=>document.getElementById(id),fmt=(n,d=2)=>Number(n).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
 let index=0,mode='forecast',playing=false,timer=null;
+if(!data.actualAvailable){const opt=$('mode').querySelector('option[value="actual"]');if(opt)opt.remove();$('mode').disabled=true;}
 function stop(){playing=false;clearInterval(timer);timer=null;$('play').textContent='▶ 하루 재생';$('play').setAttribute('aria-label','하루 재생');$('shell').classList.add('paused');}
 function play(){if(index===data.series[mode].length-1)index=0;playing=true;$('play').textContent='Ⅱ 일시정지';$('play').setAttribute('aria-label','일시정지');$('shell').classList.remove('paused');render();clearInterval(timer);timer=setInterval(()=>{if(index>=data.series[mode].length-1){stop();return;}index++;render();},Number($('speed').value));}
 function flow(id,value){$(id).classList.toggle('on',value>0.000001);}
@@ -72,7 +73,7 @@ $('prevDayLabel').textContent=dateLabel(-1)+' 전날 종료';$('nextDayLabel').t
 const carryText=(b,label)=>label+' · '+({matched:'잔량 그대로 이월',missing:'인접 시간 자료 없음 · 연속성 확인 불가',reset:'별도 계산 구간 · 잔량 이월 아님',mismatch:'잔량 불일치 · 확인 필요'}[b.status]);
 $('carryNote').textContent=carryText(daily.previous,'전날 → 오늘')+' / '+carryText(daily.next,'오늘 → 다음 날');
 $('carryNote').classList.toggle('warning',daily.previous.status!=='matched'||daily.next.status!=='matched');
-$('modeNote').textContent=data.day+' · '+(mode==='forecast'?'예측 발전량·가격을 믿고 만든 계획을 재생합니다. 실제 값은 아래에서 비교합니다.':'실제 발전량·가격을 미리 알았다고 가정해 다시 최적화한 비교 계획입니다. 실제 운전 기록이 아닙니다.');
+$('modeNote').textContent=data.day+' · '+(mode==='forecast'?(data.actualAvailable?'예측 발전량·가격을 믿고 만든 계획을 재생합니다. 실제 값은 아래에서 비교합니다.':'예측 발전량·가격으로 세운 운영계획을 재생합니다. 이 기간은 아직 실측이 없습니다.'):'실제 발전량·가격을 미리 알았다고 가정해 다시 최적화한 비교 계획입니다. 실제 운전 기록이 아닙니다.');
 $('genLabel').textContent=mode==='forecast'?'이 시간 예측 발전량':'이 시간 실측 발전량';$('genValue').textContent=fmt(row.g)+' MWh';$('sellValue').textContent=fmt(row.q)+' MWh';$('sellPrice').textContent='SMP + REC = '+fmt(row.p+row.rec,1)+' 원/kWh';
 $('chargeLabel').textContent='충전 '+fmt(row.c)+' MWh';$('dischargeLabel').textContent='방전 '+fmt(row.d)+' MWh';$('curtailValue').textContent=fmt(row.r)+' MWh';
 $('socValue').textContent=fmt(row.soc,1)+'%';$('socDetail').textContent=fmt(row.e)+' / '+fmt(data.capacity,0)+' MWh';$('socTransition').textContent=row.hour.slice(0,2)+'시 '+fmt(row.startSoc,1)+'% → '+String(index+1).padStart(2,'0')+'시 '+fmt(row.soc,1)+'%';$('batteryFill').setAttribute('width',87*Math.max(0,Math.min(100,row.soc))/100);
@@ -80,7 +81,7 @@ flow('flowGen',row.g);flow('flowSale',row.q);flow('flowCharge',row.c);flow('flow
 let message=row.c>0.000001?'저장 중 · 발전한 전력 중 '+fmt(row.c)+' MWh를 배터리에 충전합니다.':row.d>0.000001?'방전 중 · 배터리에서 '+fmt(row.d)+' MWh를 꺼내 판매에 보탭니다.':'대기 중 · 배터리 충방전 없이 '+fmt(row.q)+' MWh를 판매하도록 계획했습니다.';
 if(row.r>0.000001)message+=' '+fmt(row.r)+' MWh는 판매하지 않습니다.';$('reason').textContent=message;
 $('price').innerHTML=fmt(row.p,1)+' <small>원/kWh</small>';$('rec').innerHTML=fmt(row.rec,1)+' <small>원/kWh</small>';$('profit').innerHTML=fmt(row.profit/10000,1)+' <small>만 원</small>';$('cumulative').innerHTML=fmt(row.cumulative/10000,1)+' <small>만 원</small>';
-const genDelta=row.actualG-row.g;$('compare').textContent=mode==='forecast'?'실제 값과 비교 · 발전량 '+fmt(row.actualG)+' MWh (예측보다 '+(genDelta>=0?'+':'')+fmt(genDelta)+') · SMP '+fmt(row.actualP,1)+'원/kWh. 이 오차에 따른 추가 충방전·정산은 아직 계산하지 않았습니다.':'비교 기준 보기 · 실제 값을 미리 알 때의 계획입니다. 예측 계획을 실제 상황에 적용한 결과와는 다릅니다.';
+const genDelta=row.actualG-row.g;$('compare').textContent=row.actualG===null?'실측 없음 · 예측 발전량·가격으로 세운 계획입니다. 실측이 들어오면 같은 시각의 실제 값을 여기서 비교합니다.':mode==='forecast'?'실제 값과 비교 · 발전량 '+fmt(row.actualG)+' MWh (예측보다 '+(genDelta>=0?'+':'')+fmt(genDelta)+') · SMP '+fmt(row.actualP,1)+'원/kWh. 이 오차에 따른 추가 충방전·정산은 아직 계산하지 않았습니다.':'비교 기준 보기 · 실제 값을 미리 알 때의 계획입니다. 예측 계획을 실제 상황에 적용한 결과와는 다릅니다.';
 }
 $('play').onclick=()=>playing?stop():play();$('prev').onclick=()=>{stop();index=Math.max(0,index-1);render();};$('next').onclick=()=>{stop();index=Math.min(data.series[mode].length-1,index+1);render();};$('scrub').oninput=()=>{stop();index=Number($('scrub').value);render();};$('mode').onchange=()=>{stop();mode=$('mode').value;render();};$('speed').onchange=()=>{if(playing)play();};document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});render();
 </script></body></html>

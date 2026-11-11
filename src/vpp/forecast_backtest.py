@@ -13,6 +13,8 @@ ESS 없음 수익과의 차이다.
 출력: <out>/<실행ID>/
     hourly_forecast.csv, hourly_actual.csv   시나리오별 확정 24시간 계획 (계획일·구간 표시)
     daily_comparison.csv                      계획일별 두 시나리오 나란히 (계획 수익 차이 포함)
+    (기간에 실측이 하나도 없으면 예측 계획만 만든다: hourly_forecast.csv + daily_forecast.csv,
+     summary.actual_available=false. 운영자가 예측만으로 계획을 보는 기본 상황.)
     excluded_days.csv                         제외한 계획일과 사유 (stage=plan: 예측 부족으로
                                               계획 불가, comparison: 실측 부족으로 비교만 불가)
     comparison.html                           SOC 이월·충방전 비교 그래프
@@ -289,29 +291,41 @@ def run_forecast_backtest(
         plan_excluded.assign(stage="plan"),
         comparison_excluded.assign(stage="comparison"),
     ], ignore_index=True).sort_values("planning_day").reset_index(drop=True)
-    if not windows:
-        raise RuntimeError(
-            f"비교할 수 있는 창이 없습니다. 제외 사유: {excluded.to_dict('records')}"
-        )
+    # 실측이 하나도 없는 기간(운영자 화면의 기본 상황)은 예측만으로 전체 창의 운영계획을 만든다.
+    # 이때는 비교 시나리오·비교 검사가 없고 summary.actual_available=false 로 표시한다.
+    actual_available = bool(windows)
+    comparable_count = len(windows)
+    if not actual_available:
+        windows = all_windows
 
     forecast = run_scenario(windows, ess, "forecast", rec=rec)
-    actual = run_scenario(windows, ess, "actual", rec=rec)
-    hourly_f, hourly_a = stack_hourly(forecast), stack_hourly(actual)
-    daily = compare_daily(forecast, actual)
-    compare = comparison_checks(forecast, actual, ess)
-    warnings = comparison_warnings(forecast, actual)
-    plans = plan_checks(forecast, ess) + plan_checks(actual, ess)
+    actual = run_scenario(windows, ess, "actual", rec=rec) if actual_available else None
+    hourly_f = stack_hourly(forecast)
+    plans = plan_checks(forecast, ess)
+    compare: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    if actual is not None:
+        compare = comparison_checks(forecast, actual, ess)
+        warnings = comparison_warnings(forecast, actual)
+        plans += plan_checks(actual, ess)
 
     run_id = run_id or f"forecast_{start}_{end}"
     out = new_run_dir(out_dir, run_id, overwrite)
     hourly_f.to_csv(out / "hourly_forecast.csv", index=False, encoding="utf-8-sig")
-    hourly_a.to_csv(out / "hourly_actual.csv", index=False, encoding="utf-8-sig")
-    daily.to_csv(out / "daily_comparison.csv", index=False, encoding="utf-8-sig")
     excluded.to_csv(out / "excluded_days.csv", index=False, encoding="utf-8-sig")
-    comparison_figure(forecast, actual, ess).write_html(out / "comparison.html",
-                                                        include_plotlyjs="cdn")
+    if actual is not None:
+        stack_hourly(actual).to_csv(out / "hourly_actual.csv", index=False, encoding="utf-8-sig")
+        compare_daily(forecast, actual).to_csv(out / "daily_comparison.csv", index=False,
+                                               encoding="utf-8-sig")
+        comparison_figure(forecast, actual, ess).write_html(out / "comparison.html",
+                                                            include_plotlyjs="cdn")
+    else:
+        stack_daily(forecast).to_csv(out / "daily_forecast.csv", index=False,
+                                     encoding="utf-8-sig")
 
-    totals = {"forecast": scenario_totals(forecast), "actual": scenario_totals(actual)}
+    totals = {"forecast": scenario_totals(forecast)}
+    if actual is not None:
+        totals["actual"] = scenario_totals(actual)
     summary = {
         "mode": MODE,
         "run_id": run_id,
@@ -327,7 +341,11 @@ def run_forecast_backtest(
         "commit_hours": float(COMMIT_HOURS),
         "terminal": "구간 마지막 계획일은 24시간만 풀고 E[끝] ≥ 구간 시작 에너지",
         "scenarios": totals,
+        "actual_available": actual_available,
+        "actual_note": ("실측이 없어 예측 계획만 만들었다 (비교 시나리오 없음)"
+                        if not actual_available else None),
         "planned_objective_diff_krw": (
+            None if actual is None else
             totals["forecast"]["planned_objective_krw"] - totals["actual"]["planned_objective_krw"]
         ),
         "planned_objective_diff_note": "예측이 맞았다고 가정한 계획 수익의 차이. 실제 손익 아님",
@@ -338,7 +356,8 @@ def run_forecast_backtest(
             0.0 if rec is None
             else float(sum(rec.initial_energy_rec_upper_bound_krw(
                 ess, r.result.hourly["ts"],
-                initial_energy_mwh=r.result.period_initial_energy_mwh) for r in actual))
+                initial_energy_mwh=r.result.period_initial_energy_mwh)
+                for r in (actual if actual is not None else forecast)))
         ),
         "inputs": {
             "solar_predictions": str(solar_path), "wind_predictions": str(wind_path),
@@ -357,13 +376,15 @@ def run_forecast_backtest(
         "run_id": run_id,
         "mode": MODE,
         "comparison_checks": compare,
+        # 실측이 없으면 비교할 것이 없으므로 통과로 둔다 (actual_available 로 구분)
         "comparison_all_passed": all(c["passed"] for c in compare),
+        "actual_available": actual_available,
         "comparison_warnings": warnings,
         "plan_checks": plans,
         "plan_checks_all_passed": all(p["all_passed"] for p in plans),
         "data_checks": {
             "windows_built": int(len(all_windows)),
-            "comparable_windows": int(len(windows)),
+            "comparable_windows": int(comparable_count),
             "excluded_days": excluded.assign(
                 planning_day=excluded["planning_day"].astype(str)
             ).to_dict("records"),

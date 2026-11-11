@@ -114,6 +114,40 @@ def test_rec_config_splits_revenue_and_applies_to_both_scenarios(tmp_path):
     assert delta_no_ess == pytest.approx(70000 * gen)
 
 
+def test_period_without_any_actual_still_produces_forecast_plan(tmp_path):
+    """실측이 하나도 없는 기간(운영자의 기본 상황): 비교 없이 예측 계획만 만들고 그렇게 표시한다."""
+    write_inputs(tmp_path, DAYS)
+    for kind in ("solar", "wind"):
+        pred = pd.read_parquet(tmp_path / f"{kind}.parquet").drop(columns=["generation_kwh"])
+        pred.to_parquet(tmp_path / f"{kind}.parquet", index=False)
+    smp = pd.read_csv(tmp_path / "smp.csv")
+    smp["smp_actual"] = None
+    smp.to_csv(tmp_path / "smp.csv", index=False)
+    out = fb.run_forecast_backtest(
+        DAYS[0], DAYS[-1],
+        solar_path=tmp_path / "solar.parquet", wind_path=tmp_path / "wind.parquet",
+        smp_path=tmp_path / "smp.csv", plants_path=tmp_path / "plants.csv",
+        ess_path=tmp_path / "ess.yaml", out_dir=tmp_path / "out", run_id="fo",
+    )
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))
+    assert summary["actual_available"] is False
+    assert summary["days"] == len(DAYS) and "actual" not in summary["scenarios"]
+    assert summary["planned_objective_diff_krw"] is None
+    assert validation["plan_checks_all_passed"] and validation["comparison_all_passed"]
+    assert validation["data_checks"]["comparable_windows"] == 0
+    assert (out / "hourly_forecast.csv").exists() and (out / "daily_forecast.csv").exists()
+    assert not (out / "hourly_actual.csv").exists()
+    hourly = pd.read_csv(out / "hourly_forecast.csv")
+    assert len(hourly) == 24 * len(DAYS)
+    # 대시보드 로더도 실측 없이 읽힌다
+    pytest.importorskip("streamlit")
+    from dashboard.overview_data import load_experiment
+    data = load_experiment(out)
+    assert data["actual"] is None and "actual" not in data["revenues"]
+    assert data["metrics"]["days"] == len(DAYS) and data["metrics"]["actual_available"] is False
+
+
 def test_days_without_actual_are_compared_out_not_planned_out(tmp_path):
     """실측이 빠진 날은 두 시나리오 모두 비교에서 빠지고(stage=comparison) 검사는 통과한다."""
     write_inputs(tmp_path, DAYS)

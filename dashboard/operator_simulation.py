@@ -19,13 +19,18 @@ def replay_payload(data: dict, day) -> dict:
     ess = data["ess"]
     series = {}
     daily_soc = {}
-    for mode in ("forecast", "actual"):
+    has_actual = data.get("actual") is not None
+    for mode in ("forecast", "actual") if has_actual else ("forecast",):
         frame = data[mode]
         block = frame[frame.ts.dt.date == day].reset_index(drop=True)
-        actual = data["actual"]
-        actual = actual[actual.ts.dt.date == day].reset_index(drop=True)
-        if block.empty or not block.ts.equals(actual.ts):
-            raise ValueError("선택한 하루의 예측·실측 시각이 일치하지 않습니다.")
+        if block.empty:
+            raise ValueError("선택한 하루의 계획이 없습니다.")
+        actual = None  # 실측이 없는 기간: 비교 값은 null 로 보낸다
+        if has_actual:
+            actual = data["actual"]
+            actual = actual[actual.ts.dt.date == day].reset_index(drop=True)
+            if not block.ts.equals(actual.ts):
+                raise ValueError("선택한 하루의 예측·실측 시각이 일치하지 않습니다.")
         if len(block) != 24 or block.ts.dt.hour.tolist() != list(range(24)):
             raise ValueError("하루 재생에는 00시부터 23시까지 빠짐없는 데이터가 필요합니다.")
         rec = block.get(REC_COLUMN, pd.Series(0.0, index=block.index))
@@ -59,8 +64,9 @@ def replay_payload(data: dict, day) -> dict:
                     "wear": wear,
                     "profit": profit,
                     "cumulative": cumulative,
-                    "actualG": float(actual.iloc[i].generation_mwh),
-                    "actualP": float(actual.iloc[i].price_krw_per_mwh / 1000),
+                    "actualG": None if actual is None else float(actual.iloc[i].generation_mwh),
+                    "actualP": (None if actual is None
+                                else float(actual.iloc[i].price_krw_per_mwh / 1000)),
                 }
             )
         series[mode] = records
@@ -101,6 +107,7 @@ def replay_payload(data: dict, day) -> dict:
         "maxSoc": ess.soc_max * 100,
         "series": series,
         "dailySoc": daily_soc,
+        "actualAvailable": has_actual,
     }
 
 

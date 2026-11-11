@@ -4,11 +4,11 @@
 auto_refresh: true
 poll_seconds: 30
 ess: config/ess_v0_1.yaml
-rec: config/rec_v0.yaml          # 비우면 REC 미적용
+rec: config/rec_v0.yaml # 비우면 REC 미적용
 plants: data/reference/plant_location_master_21.csv
 # 발전량 담당 공유 parquet (improved_generation_kwh 열이 있으면 그 열을, 없으면 lightgbm 열을 쓴다)
-solar: artifacts/predictions/solar_validation_predictions.parquet
-wind: artifacts/predictions/wind_validation_predictions.parquet
+solar: artifacts/predictions/solar_improved_predictions.parquet
+wind: artifacts/predictions/wind_improved_predictions.parquet
 # SMP 담당 공유 csv
 smp: data/processed/forecast/smp_forecast.csv
 output: data/processed/operator_pipeline

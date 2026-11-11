@@ -220,10 +220,8 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         ess_path=copies["ess"],
         rec_path=cfg.get("rec"),
     )
-    comparable = [w for w in windows if w.comparable]
-    backtest = None
     start_energy = None
-    if comparable:
+    if True:  # 실측이 없어도 예측 계획(롤링)은 만든다. 비교 시나리오는 실측이 있을 때만 붙는다.
         backtest = run_forecast_backtest(
             windows[0].planning_day,
             windows[-1].planning_day,
@@ -281,6 +279,9 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         "backtest": str(backtest) if backtest else None,
         "plan": str(plan),
         "realized_profit": None,
+        # 실측이 없는 기간은 예측 계획만 만든다 (비교 시나리오 없음). 화면이 이 값으로 분기한다.
+        "actual_available": bool(read_json(backtest / "summary.json").get("actual_available"))
+        if backtest else False,
         "generation_availability_verified": False,
         "start_soc_note": "ESS 설정 시작 잔량",
     }

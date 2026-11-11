@@ -72,17 +72,24 @@ def load_experiment(folder: Path) -> dict:
         raise ValueError("예측 계획과 실측을 미리 알고 만든 계획의 비교 결과를 선택하세요.")
     require_rec = bool((summary.get("rec") or {}).get("enabled"))
     forecast = read_plan(folder / "hourly_forecast.csv", require_rec=require_rec)
-    actual = read_plan(folder / "hourly_actual.csv", require_rec=require_rec)
-    if forecast.empty or not forecast["ts"].equals(actual["ts"]):
-        raise ValueError("두 계획의 비교 시각이 다릅니다. 일부만 골라 수익을 비교하지 않습니다.")
-    rec_f = forecast.get(REC_COLUMN, pd.Series(0.0, index=forecast.index))
-    rec_a = actual.get(REC_COLUMN, pd.Series(0.0, index=actual.index))
-    if not np.allclose(rec_f, rec_a, rtol=0, atol=1e-8):
-        raise ValueError("두 계획의 REC 단가가 달라 공정하게 비교할 수 없습니다.")
+    if forecast.empty:
+        raise ValueError("예측 계획이 비어 있습니다.")
+    # 실측이 없는 기간은 예측 계획만 있다(actual=None). 화면은 비교 부분만 비우고 계획은 보여준다.
+    actual_csv = folder / "hourly_actual.csv"
+    has_actual = bool(summary.get("actual_available", actual_csv.exists()))
+    actual = read_plan(actual_csv, require_rec=require_rec) if has_actual else None
+    if actual is not None:
+        if not forecast["ts"].equals(actual["ts"]):
+            raise ValueError("두 계획의 비교 시각이 다릅니다. 일부만 골라 비교하지 않습니다.")
+        rec_f = forecast.get(REC_COLUMN, pd.Series(0.0, index=forecast.index))
+        rec_a = actual.get(REC_COLUMN, pd.Series(0.0, index=actual.index))
+        if not np.allclose(rec_f, rec_a, rtol=0, atol=1e-8):
+            raise ValueError("두 계획의 REC 단가가 달라 공정하게 비교할 수 없습니다.")
     known = {f.name for f in fields(EssParams)}
     ess = EssParams(**{k: v for k, v in summary["ess"].items() if k in known})
     revenues = {}
-    for name, plan in (("forecast", forecast), ("actual", actual)):
+    pairs = [("forecast", forecast)] + ([("actual", actual)] if actual is not None else [])
+    for name, plan in pairs:
         revenue = plan_revenue_breakdown(plan, ess)
         base = plan_revenue_breakdown(no_ess(plan), ess)
         revenue["no_ess_net_krw"] = base["net_revenue_krw"]
@@ -98,11 +105,27 @@ def load_experiment(folder: Path) -> dict:
                 "저장된 요약과 시간별 수익이 다릅니다. 같은 실행의 파일인지 확인하세요."
             )
         revenues[name] = revenue
-    error_gen = forecast["generation_mwh"] - actual["generation_mwh"]
-    error_smp = (forecast["price_krw_per_mwh"] - actual["price_krw_per_mwh"]) / 1000
-    actual_low = actual["price_krw_per_mwh"] <= 0
-    forecast_low = forecast["price_krw_per_mwh"] <= 0
-    gaps = actual["ts"].diff().gt(pd.Timedelta(hours=1))
+    gaps = forecast["ts"].diff().gt(pd.Timedelta(hours=1))
+    metrics: dict = {
+        "hours": len(forecast),
+        "days": forecast["ts"].dt.date.nunique(),
+        "segments": int(gaps.sum()) + 1,
+        "actual_available": actual is not None,
+    }
+    if actual is not None:
+        error_gen = forecast["generation_mwh"] - actual["generation_mwh"]
+        error_smp = (forecast["price_krw_per_mwh"] - actual["price_krw_per_mwh"]) / 1000
+        actual_low = actual["price_krw_per_mwh"] <= 0
+        forecast_low = forecast["price_krw_per_mwh"] <= 0
+        metrics.update({
+            "generation_mae_mwh": float(error_gen.abs().mean()),
+            "generation_bias_mwh": float(error_gen.mean()),
+            "smp_mae_krw_per_kwh": float(error_smp.abs().mean()),
+            "smp_bias_krw_per_kwh": float(error_smp.mean()),
+            "actual_low_hours": int(actual_low.sum()),
+            "forecast_low_hits": int((actual_low & forecast_low).sum()),
+            "forecast_false_alarms": int((~actual_low & forecast_low).sum()),
+        })
     excluded_path = folder / "excluded_days.csv"
     excluded = pd.read_csv(excluded_path) if excluded_path.exists() else pd.DataFrame()
     return {
@@ -112,17 +135,6 @@ def load_experiment(folder: Path) -> dict:
         "ess": ess,
         "revenues": revenues,
         "realized_profit_krw": None,
-        "metrics": {
-            "generation_mae_mwh": float(error_gen.abs().mean()),
-            "generation_bias_mwh": float(error_gen.mean()),
-            "smp_mae_krw_per_kwh": float(error_smp.abs().mean()),
-            "smp_bias_krw_per_kwh": float(error_smp.mean()),
-            "actual_low_hours": int(actual_low.sum()),
-            "forecast_low_hits": int((actual_low & forecast_low).sum()),
-            "forecast_false_alarms": int((~actual_low & forecast_low).sum()),
-            "hours": len(actual),
-            "days": actual["ts"].dt.date.nunique(),
-            "segments": int(gaps.sum()) + 1,
-        },
+        "metrics": metrics,
         "excluded": excluded,
     }
