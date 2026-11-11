@@ -24,7 +24,7 @@
 </div><div class="carry-note" id="carryNote" role="status"></div>
 <p class="soc-help">하루 시작·종료 잔량은 시간 이동과 관계없이 고정됩니다.</p>
 </section>
-<div class="tools"><button id="play" aria-label="하루 재생">▶ 하루 재생</button><button id="prev" aria-label="이전 시간">‹</button><button id="next" aria-label="다음 시간">›</button><select id="mode" aria-label="재생할 계획"><option value="forecast">예측으로 세운 계획</option><option value="actual">실측을 미리 알고 다시 세운 계획</option></select><select id="speed" aria-label="재생 속도"><option value="1600">보통 속도</option><option value="700" selected>빠르게</option><option value="3000">천천히</option></select><output class="clock" id="clock">00:00</output></div>
+<div class="tools"><button id="play" aria-label="하루 재생">▶ 하루 재생</button><button id="prev" aria-label="이전 시간">‹</button><button id="next" aria-label="다음 시간">›</button><select id="mode" aria-label="재생할 계획"><option value="forecast">예측으로 세운 계획</option><option value="actual">실측을 미리 알고 다시 세운 계획</option><option value="executed">확정 계획을 실측에 적용한 실행 결과</option></select><select id="speed" aria-label="재생 속도"><option value="1600">보통 속도</option><option value="700" selected>빠르게</option><option value="3000">천천히</option></select><output class="clock" id="clock">00:00</output></div>
 <p class="mode-note" id="modeNote"></p>
 <svg class="scene" viewBox="0 0 980 320" role="img" aria-label="재생에너지 발전소에서 판매와 배터리 저장으로 흐르는 전력량">
 <defs><linearGradient id="batteryGradient"><stop stop-color="#1f8f7a"/><stop offset="1" stop-color="#6fd0b8"/></linearGradient></defs>
@@ -61,27 +61,33 @@
 const data=JSON.parse(document.getElementById('replay-data').textContent);
 const $=id=>document.getElementById(id),fmt=(n,d=2)=>Number(n).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
 let index=0,mode='forecast',playing=false,timer=null;
-if(!data.actualAvailable){const opt=$('mode').querySelector('option[value="actual"]');if(opt)opt.remove();$('mode').disabled=true;}
+if(!data.actualAvailable){const opt=$('mode').querySelector('option[value="actual"]');if(opt)opt.remove();}
+if(!data.executionAvailable){const opt=$('mode').querySelector('option[value="executed"]');if(opt)opt.remove();}
+if($('mode').options.length<2)$('mode').disabled=true;
+const isExec=()=>mode==='executed';
 function stop(){playing=false;clearInterval(timer);timer=null;$('play').textContent='▶ 하루 재생';$('play').setAttribute('aria-label','하루 재생');$('shell').classList.add('paused');}
 function play(){if(index===data.series[mode].length-1)index=0;playing=true;$('play').textContent='Ⅱ 일시정지';$('play').setAttribute('aria-label','일시정지');$('shell').classList.remove('paused');render();clearInterval(timer);timer=setInterval(()=>{if(index>=data.series[mode].length-1){stop();return;}index++;render();},Number($('speed').value));}
 function flow(id,value){$(id).classList.toggle('on',value>0.000001);}
 function render(){const row=data.series[mode][index];$('clock').textContent=row.hour+'–'+String(index+1).padStart(2,'0')+':00';$('scrub').value=index;$('scrub').max=data.series[mode].length-1;$('scrub').setAttribute('aria-valuetext',row.hour);
 const daily=data.dailySoc[mode],percent=n=>n===null?'—':fmt(n,1)+'%';
+document.querySelector('.eyebrow').textContent=isExec()?'실행 결과 재생':'운영계획 재생';document.querySelector('.badge').textContent=isExec()?'저장된 실행 결과 재생 · 실시간 운전 아님':'저장된 계획 재생 · 실시간 운전 아님';
 $('prevDaySoc').textContent=percent(daily.previous.soc);$('dayStartSoc').textContent=percent(daily.start);$('dayEndSoc').textContent=percent(daily.end);$('nextDaySoc').textContent=percent(daily.next.soc);
 const dayDate=new Date(data.day+'T12:00:00Z'),dateLabel=offset=>{const d=new Date(dayDate);d.setUTCDate(d.getUTCDate()+offset);return (d.getUTCMonth()+1)+'/'+d.getUTCDate();};
 $('prevDayLabel').textContent=dateLabel(-1)+' 전날 종료';$('nextDayLabel').textContent=dateLabel(1)+' 다음 날 시작';
 const carryText=(b,label)=>label+' · '+({matched:'잔량 그대로 이월',missing:'인접 시간 자료 없음 · 연속성 확인 불가',reset:'별도 계산 구간 · 잔량 이월 아님',mismatch:'잔량 불일치 · 확인 필요'}[b.status]);
 $('carryNote').textContent=carryText(daily.previous,'전날 → 오늘')+' / '+carryText(daily.next,'오늘 → 다음 날');
 $('carryNote').classList.toggle('warning',daily.previous.status!=='matched'||daily.next.status!=='matched');
-$('modeNote').textContent=data.day+' · '+(mode==='forecast'?(data.actualAvailable?'예측 발전량·가격을 믿고 만든 계획을 재생합니다. 실제 값은 아래에서 비교합니다.':'예측 발전량·가격으로 세운 계획'):'실제 발전량·가격을 미리 알았다고 가정해 다시 최적화한 비교 계획입니다. 실제 운전 기록이 아닙니다.');
-$('genLabel').textContent=mode==='forecast'?'이 시간 예측 발전량':'이 시간 실측 발전량';$('genValue').textContent=fmt(row.g)+' MWh';$('sellValue').textContent=fmt(row.q)+' MWh';$('sellPrice').textContent='SMP + REC = '+fmt(row.p+row.rec,1)+' 원/kWh';
+$('modeNote').textContent=data.day+' · '+(isExec()?'확정 판매계획을 고정한 채 실측 발전량에 맞춰 ESS 를 운전한 결과입니다. 정산은 실측 SMP 를 하루전·편차 가격으로 쓴 실험 가정입니다.':mode==='forecast'?(data.actualAvailable?'예측 발전량·가격을 믿고 만든 계획을 재생합니다. 실제 값은 아래에서 비교합니다.':'예측 발전량·가격으로 세운 계획'):'실제 발전량·가격을 미리 알았다고 가정해 다시 최적화한 비교 계획입니다. 실제 운전 기록이 아닙니다.');
+$('genLabel').textContent=mode==='forecast'?'이 시간 예측 발전량':isExec()?'이 시간 실측 발전량 (예측 '+fmt(row.forecastG)+')':'이 시간 실측 발전량';$('genValue').textContent=fmt(row.g)+' MWh';$('sellValue').textContent=fmt(row.q)+' MWh'+(isExec()?' / 계획 '+fmt(row.committed):'');$('sellPrice').textContent='SMP + REC = '+fmt(row.p+row.rec,1)+' 원/kWh';
 $('chargeLabel').textContent='충전 '+fmt(row.c)+' MWh';$('dischargeLabel').textContent='방전 '+fmt(row.d)+' MWh';$('curtailValue').textContent=fmt(row.r)+' MWh';
 $('socValue').textContent=fmt(row.soc,1)+'%';$('socDetail').textContent=fmt(row.e)+' / '+fmt(data.capacity,0)+' MWh';$('socTransition').textContent=row.hour.slice(0,2)+'시 '+fmt(row.startSoc,1)+'% → '+String(index+1).padStart(2,'0')+'시 '+fmt(row.soc,1)+'%';$('batteryFill').setAttribute('width',87*Math.max(0,Math.min(100,row.soc))/100);
 flow('flowGen',row.g);flow('flowSale',row.q);flow('flowCharge',row.c);flow('flowDischarge',row.d);flow('flowCurtail',row.r);
-let message=row.c>0.000001?'저장 중 · 발전한 전력 중 '+fmt(row.c)+' MWh를 배터리에 충전합니다.':row.d>0.000001?'방전 중 · 배터리에서 '+fmt(row.d)+' MWh를 꺼내 판매에 보탭니다.':'대기 중 · 배터리 충방전 없이 '+fmt(row.q)+' MWh를 판매하도록 계획했습니다.';
+let message=row.c>0.000001?'저장 중 · 발전한 전력 중 '+fmt(row.c)+' MWh를 배터리에 충전합니다.':row.d>0.000001?'방전 중 · 배터리에서 '+fmt(row.d)+' MWh를 꺼내 판매에 보탭니다.':'대기 중 · 배터리 충방전 없이 '+fmt(row.q)+' MWh를 '+(isExec()?'공급했습니다.':'판매하도록 계획했습니다.');
+if(isExec()){message+=' 계획 충전 '+fmt(row.plannedC)+' · 계획 방전 '+fmt(row.plannedD)+' MWh.';if(row.shortfall>0.000001)message+=' 확정 판매량보다 '+fmt(row.shortfall)+' MWh 부족.';if(row.surplus>0.000001)message+=' 확정 판매량보다 '+fmt(row.surplus)+' MWh 초과 공급.';}
 if(row.r>0.000001)message+=' '+fmt(row.r)+' MWh는 판매하지 않습니다.';$('reason').textContent=message;
 $('price').innerHTML=fmt(row.p,1)+' <small>원/kWh</small>';$('rec').innerHTML=fmt(row.rec,1)+' <small>원/kWh</small>';$('profit').innerHTML=fmt(row.profit/10000,1)+' <small>만 원</small>';$('cumulative').innerHTML=fmt(row.cumulative/10000,1)+' <small>만 원</small>';
-$('compare').hidden=row.actualG===null;const genDelta=row.actualG-row.g;$('compare').textContent=row.actualG===null?'실측 없음 · 예측 발전량·가격으로 세운 계획입니다. 실측이 들어오면 같은 시각의 실제 값을 여기서 비교합니다.':mode==='forecast'?'실제 값과 비교 · 발전량 '+fmt(row.actualG)+' MWh (예측보다 '+(genDelta>=0?'+':'')+fmt(genDelta)+') · SMP '+fmt(row.actualP,1)+'원/kWh. 이 오차에 따른 추가 충방전·정산은 아직 계산하지 않았습니다.':'비교 기준 보기 · 실제 값을 미리 알 때의 계획입니다. 예측 계획을 실제 상황에 적용한 결과와는 다릅니다.';
+document.querySelectorAll('.stat .label')[2].textContent=isExec()?'이 1시간의 실행 순수익':'이 1시간의 계획 순수익';document.querySelectorAll('.stat .label')[3].textContent=isExec()?'선택한 날 누적 실행 순수익':'선택한 날 누적 계획 순수익';document.querySelectorAll('.stat .label')[0].textContent=isExec()?'이 시간 정산 가격 (실측 SMP)':'이 시간 SMP';
+$('compare').hidden=row.actualG===null&&!isExec();const genDelta=row.actualG-row.g;$('compare').textContent=isExec()?'확정 판매 '+fmt(row.committed)+' MWh → 실제 공급 '+fmt(row.q)+' MWh · 부족 '+fmt(row.shortfall)+' / 초과 '+fmt(row.surplus)+' MWh · 편차 정산 '+fmt(row.deviation/10000,1)+'만 원 · 계획 SOC '+fmt(row.plannedSoc,1)+'% vs 실행 '+fmt(row.soc,1)+'%':row.actualG===null?'실측 없음 · 예측 발전량·가격으로 세운 계획입니다. 실측이 들어오면 같은 시각의 실제 값을 여기서 비교합니다.':mode==='forecast'?'실제 값과 비교 · 발전량 '+fmt(row.actualG)+' MWh (예측보다 '+(genDelta>=0?'+':'')+fmt(genDelta)+') · SMP '+fmt(row.actualP,1)+'원/kWh. 이 오차에 따른 추가 충방전·정산은 아직 계산하지 않았습니다.':'비교 기준 보기 · 실제 값을 미리 알 때의 계획입니다. 예측 계획을 실제 상황에 적용한 결과와는 다릅니다.';
 }
 $('play').onclick=()=>playing?stop():play();$('prev').onclick=()=>{stop();index=Math.max(0,index-1);render();};$('next').onclick=()=>{stop();index=Math.min(data.series[mode].length-1,index+1);render();};$('scrub').oninput=()=>{stop();index=Number($('scrub').value);render();};$('mode').onchange=()=>{stop();mode=$('mode').value;render();};$('speed').onchange=()=>{if(playing)play();};document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});render();
 </script></body></html>
