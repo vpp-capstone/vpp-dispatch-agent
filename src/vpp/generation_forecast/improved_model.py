@@ -40,7 +40,14 @@ from vpp.generation_forecast.model import (
 )
 from vpp.generation_forecast.paths import MODEL_DIR, PROCESSED_DIR, RESULTS_DIR
 from vpp.generation_forecast.tune_lightgbm import development_frame
+from vpp.generation_forecast.wind_direction_features import add_wind_direction_interactions
 from vpp.generation_forecast.wind_hybrid import fit_wind_hybrid_fixed
+from vpp.generation_forecast.wind_postprocessing import smooth_wind_prediction
+from vpp.generation_forecast.wind_regime import (
+    fit_asset_blended_wind_model,
+    fit_dynamic_wind_regime_model,
+)
+from vpp.generation_forecast.wind_uncertainty import fit_wind_residual_quantiles
 
 SOLAR_PORTFOLIO_WEATHER = [
     "shortwave_radiation_w_m2",
@@ -79,10 +86,11 @@ def fit_fixed_lgbm(
     *,
     categorical: list[str] | None = None,
     weight_mode: str = "none",
+    model_params: dict[str, Any] | None = None,
 ) -> Any:
     import lightgbm as lgb
 
-    model = make_model(estimators)
+    model = make_model(estimators, **(model_params or {}))
     model.fit(
         frame[features],
         frame[TARGET],
@@ -118,15 +126,54 @@ def train_selected(
                 featured, aws_observations, PRIMARY_STATIONS
             )
             featured = aws_calibrator.transform(featured)
+            if "dynamic_regime" in selection:
+                featured = add_wind_direction_interactions(featured)
     portfolio, portfolio_features = portfolio_frame(featured, weather_features)
     iterations = selection["selected_best_iterations"]
+    model_params = selection.get("selected_model_params", {})
     selected_weights = selection.get("production_weights", selection["weights"])
     models: dict[str, Any] = {}
+    if energy_type == "wind" and "dynamic_regime" in selection:
+        dynamic = selection["dynamic_regime"]
+        dynamic_features = [
+            *FEATURES["wind"],
+            *WIND_IMPROVEMENT_FEATURES,
+            *AWS_WIND_FEATURES,
+            "aws_proxy_wind_sector_8",
+        ]
+        dynamic_model = fit_dynamic_wind_regime_model(
+            featured,
+            dynamic_features,
+            [*CATEGORICAL_FEATURES, "aws_proxy_wind_sector_8"],
+            tuple(dynamic["regime_boundaries_ms"]),
+            np.asarray(dynamic["expert_weights_by_regime"]),
+            int(dynamic["selected_best_iterations"]["joint"]),
+            {
+                int(regime): int(value)
+                for regime, value in dynamic["selected_best_iterations"]["experts"].items()
+            },
+            dynamic["model_params"],
+        )
+        if "asset_blend" in dynamic:
+            asset_blend = dynamic["asset_blend"]
+            dynamic_model = fit_asset_blended_wind_model(
+                featured,
+                dynamic_model,
+                dynamic_features,
+                [*CATEGORICAL_FEATURES, "aws_proxy_wind_sector_8"],
+                asset_blend["asset_blend_weights"],
+                asset_blend["selected_best_iterations"],
+                dynamic["model_params"],
+            )
+        models["dynamic_regime"] = dynamic_model
+        selected_weights = {"dynamic_regime": 1.0}
+        model_params = {"dynamic_regime": dynamic["model_params"]}
     if float(selected_weights.get("direct_portfolio", 0.0)) >= 1e-8:
         models["direct_portfolio"] = fit_fixed_lgbm(
             portfolio,
             portfolio_features,
             int(iterations["direct_portfolio"]),
+            model_params=model_params.get("direct_portfolio"),
         )
     if float(selected_weights.get("asset_lightgbm", 0.0)) >= 1e-8:
         asset_features = (
@@ -138,6 +185,7 @@ def train_selected(
                 *FEATURES["wind"],
                 *WIND_IMPROVEMENT_FEATURES,
                 *(AWS_WIND_FEATURES if aws_calibrator is not None else []),
+                *(["aws_proxy_wind_sector_8"] if "dynamic_regime" in selection else []),
             ]
         )
         models["asset_lightgbm"] = fit_fixed_lgbm(
@@ -146,6 +194,7 @@ def train_selected(
             int(iterations["asset_lightgbm"]),
             categorical=CATEGORICAL_FEATURES,
             weight_mode="sqrt_capacity" if energy_type == "solar" else "none",
+            model_params=model_params.get("asset_lightgbm"),
         )
     if float(selected_weights.get("directional_hybrid", 0.0)) >= 1e-8:
         models["directional_hybrid"] = fit_wind_hybrid_fixed(
@@ -164,6 +213,7 @@ def train_selected(
         "energy_type": energy_type,
         "models": models,
         "weights": weights,
+        "model_params": model_params,
         "asset_features": (
             [
                 *FEATURES["solar"],
@@ -173,6 +223,7 @@ def train_selected(
                 *FEATURES["wind"],
                 *WIND_IMPROVEMENT_FEATURES,
                 *(AWS_WIND_FEATURES if aws_calibrator is not None else []),
+                *(["aws_proxy_wind_sector_8"] if "dynamic_regime" in selection else []),
             ]
         ),
         "portfolio_features": portfolio_features,
@@ -201,6 +252,10 @@ def train_selected(
         "bias_correction_applied": (
             aws_calibrator is not None or aws_solar_calibrator is not None
         ),
+        "wind_postprocessing": selection.get("wind_postprocessing"),
+        "wind_asset_blend_weights": selection.get("dynamic_regime", {})
+        .get("asset_blend", {})
+        .get("asset_blend_weights"),
     }
 
 
@@ -214,10 +269,25 @@ def predict_rows(bundle: dict[str, Any], prepared_frame: pd.DataFrame) -> pd.Dat
     )
     if energy_type == "wind" and bundle.get("aws_wind_calibrator") is not None:
         frame = bundle["aws_wind_calibrator"].transform(frame)
+        if "dynamic_regime" in bundle["models"]:
+            frame = add_wind_direction_interactions(frame)
     if energy_type == "solar" and bundle.get("aws_solar_calibrator") is not None:
         frame = bundle["aws_solar_calibrator"].transform(frame)
     keys = ["issue_time_utc", "valid_time_utc"]
     component_rows: dict[str, np.ndarray] = {}
+    if "dynamic_regime" in bundle["models"]:
+        dynamic_cf = enforce_physics(
+            "wind", frame, bundle["models"]["dynamic_regime"].predict(frame)
+        )
+        postprocessing = bundle.get("wind_postprocessing")
+        if postprocessing and postprocessing[0] != "none":
+            dynamic_cf = smooth_wind_prediction(
+                frame,
+                dynamic_cf,
+                str(postprocessing[0]),
+                float(postprocessing[1]),
+            )
+        component_rows["dynamic_regime"] = dynamic_cf * frame["capacity_kw"].to_numpy()
     if "asset_lightgbm" in bundle["models"]:
         asset_cf = enforce_physics(
             energy_type,
@@ -261,6 +331,31 @@ def predict_rows(bundle: dict[str, Any], prepared_frame: pd.DataFrame) -> pd.Dat
             weights["direct_portfolio"] * result["direct_total_kwh"].to_numpy() * share
         )
     result["improved_generation_kwh"] = prediction
+    if energy_type == "wind" and bundle.get("uncertainty_calibrator") is not None:
+        speed_x_capacity = (
+            result["aws_proxy_wind_speed_ms"].to_numpy()
+            * result["capacity_kw"].to_numpy()
+        )
+        speed_total = pd.Series(speed_x_capacity, index=result.index).groupby(
+            [result[keys[0]], result[keys[1]]], observed=True
+        ).transform("sum")
+        capacity_total = result.groupby(keys, observed=True)["capacity_kw"].transform("sum")
+        portfolio_wind_speed = speed_total.to_numpy() / capacity_total.to_numpy()
+        point_cf = np.divide(
+            prediction,
+            result["capacity_kw"].to_numpy(),
+            out=np.zeros(len(result), dtype=float),
+            where=result["capacity_kw"].to_numpy() > 0,
+        )
+        intervals = bundle["uncertainty_calibrator"].predict(
+            point_cf,
+            result["forecast_day_offset"].to_numpy(),
+            portfolio_wind_speed,
+        )
+        for index, quantile in enumerate(("p10", "p50", "p90")):
+            result[f"improved_generation_{quantile}_kwh"] = (
+                intervals[:, index] * result["capacity_kw"].to_numpy()
+            )
     return result
 
 
@@ -281,6 +376,40 @@ def main() -> None:
     selection["wind"]["selected_best_iterations"]["asset_lightgbm"] = int(
         selected_aws.iloc[0]["best_iteration"]
     )
+    wind_lgbm_tuning_path = args.reports / "wind_aws_lgbm_tuning_summary.json"
+    if wind_lgbm_tuning_path.exists():
+        wind_lgbm_selection = json.loads(wind_lgbm_tuning_path.read_text(encoding="utf-8"))[
+            "selected"
+        ]
+        selection["wind"]["selected_best_iterations"]["asset_lightgbm"] = int(
+            wind_lgbm_selection["median_best_iteration"]
+        )
+        selection["wind"]["selected_model_params"] = {
+            "asset_lightgbm": wind_lgbm_selection["params"]
+        }
+    dynamic_regime_path = args.reports / "wind_dynamic_regime_summary.json"
+    if dynamic_regime_path.exists():
+        dynamic_regime = json.loads(dynamic_regime_path.read_text(encoding="utf-8"))
+        if dynamic_regime["selected_candidate"] == "dynamic":
+            dynamic_regime["model_params"] = {
+                "learning_rate": 0.015,
+                "num_leaves": 31,
+                "min_child_samples": 150,
+                "reg_lambda": 1.0,
+            }
+            asset_model_path = args.reports / "wind_asset_model_summary.json"
+            if asset_model_path.exists():
+                asset_model = json.loads(asset_model_path.read_text(encoding="utf-8"))
+                if asset_model["selected_candidate"] == "asset_blend":
+                    dynamic_regime["asset_blend"] = asset_model
+            selection["wind"]["dynamic_regime"] = dynamic_regime
+    postprocessing_path = args.reports / "wind_postprocessing_summary.json"
+    if postprocessing_path.exists():
+        postprocessing = json.loads(postprocessing_path.read_text(encoding="utf-8"))
+        if postprocessing["selected_candidate"] != "none":
+            selection["wind"]["wind_postprocessing"] = postprocessing[
+                "selected_method"
+            ]
     solar_aws_holdout = pd.read_csv(args.reports / "solar_aws_2024_holdout.csv")
     selected_solar_aws = solar_aws_holdout[
         solar_aws_holdout["candidate"].eq("aws_asset_current_direct")
@@ -304,6 +433,14 @@ def main() -> None:
             selection[energy_type],
             aws_observations,
         )
+        if energy_type == "wind" and "dynamic_regime" in bundle["models"]:
+            uncertainty_rows = pd.read_parquet(
+                args.reports / "wind_final_fold_predictions.parquet"
+            )
+            uncertainty_rows["dynamic"] = uncertainty_rows["final_prediction"]
+            bundle["uncertainty_calibrator"] = fit_wind_residual_quantiles(
+                uncertainty_rows
+            )
         path = args.models / f"{energy_type}_improved_production.joblib"
         joblib.dump(bundle, path)
         summary["models"][energy_type] = {
@@ -311,8 +448,16 @@ def main() -> None:
             "weights": bundle["weights"],
             "rows": len(frame),
             "components": list(bundle["models"]),
+            "model_params": bundle["model_params"],
             "bias_correction_applied": bundle["bias_correction_applied"],
             "aws_station_map": bundle["aws_station_map"],
+            "uncertainty_quantiles": (
+                [0.1, 0.5, 0.9]
+                if bundle.get("uncertainty_calibrator") is not None
+                else None
+            ),
+            "wind_asset_blend_weights": bundle.get("wind_asset_blend_weights"),
+            "wind_postprocessing": bundle.get("wind_postprocessing"),
         }
     (args.reports / "generation_improved_production_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"

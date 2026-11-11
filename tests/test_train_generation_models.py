@@ -30,10 +30,73 @@ from vpp.generation_forecast.tune_lightgbm import (
     select_jointly_stable_candidates,
     split_fold,
 )
+from vpp.generation_forecast.wind_direction_features import add_wind_direction_interactions
 from vpp.generation_forecast.wind_hybrid import DirectionalWindPowerCurve, WindPowerCurve
+from vpp.generation_forecast.wind_postprocessing import smooth_wind_prediction
+from vpp.generation_forecast.wind_regime import wind_speed_regime
+from vpp.generation_forecast.wind_uncertainty import (
+    WindResidualQuantiles,
+    weighted_quantile,
+)
 
 
 class TrainGenerationModelsTests(unittest.TestCase):
+    def test_wind_smoothing_stays_inside_issue_trajectory(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "asset_id": ["a", "a", "a", "a"],
+                "issue_time_utc": pd.to_datetime(
+                    ["2024-01-01"] * 3 + ["2024-01-02"], utc=True
+                ),
+                "lead_hour": [1, 2, 3, 1],
+            }
+        )
+        result = smooth_wind_prediction(
+            frame, np.array([0.0, 1.0, 0.0, 0.8]), "mean3", 0.25
+        )
+        np.testing.assert_allclose(result[:3], [0.125, 5.0 / 6.0, 0.125])
+        self.assertAlmostEqual(float(result[3]), 0.8)
+
+    def test_wind_uncertainty_is_ordered_and_contains_point(self) -> None:
+        calibrator = WindResidualQuantiles(
+            grouped={(0, 0): np.array([-0.2, -0.01, 0.1])},
+            by_offset={},
+            global_quantiles=np.array([-0.3, 0.0, 0.3]),
+        )
+        result = calibrator.predict(
+            np.array([0.15, 0.9]), np.array([0, 3]), np.array([2.0, 8.0])
+        )
+        np.testing.assert_allclose(result[:, 1], [0.15, 0.9])
+        self.assertTrue((result[:, 0] <= result[:, 1]).all())
+        self.assertTrue((result[:, 1] <= result[:, 2]).all())
+        self.assertTrue((result >= 0.0).all() and (result <= 1.0).all())
+
+    def test_weighted_quantile_respects_heavy_observation(self) -> None:
+        result = weighted_quantile(
+            np.array([0.0, 1.0]), (0.5,), np.array([100.0, 1.0])
+        )
+        self.assertLess(float(result[0]), 0.1)
+
+    def test_wind_direction_interactions_create_expected_sector(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "aws_proxy_wind_direction_sin": [0.0, 1.0],
+                "aws_proxy_wind_direction_cos": [1.0, 0.0],
+                "aws_proxy_wind_speed_ms": [2.0, 3.0],
+                "wind_direction_sin": [0.0, 1.0],
+                "wind_direction_cos": [1.0, 0.0],
+            }
+        )
+        result = add_wind_direction_interactions(frame)
+        self.assertEqual(result["aws_proxy_wind_sector_8"].tolist(), [0, 2])
+        self.assertTrue(np.allclose(result["gfs_aws_direction_alignment"], 1.0))
+
+    def test_wind_speed_regime_respects_boundaries(self) -> None:
+        result = wind_speed_regime(
+            np.array([0.0, 2.99, 3.0, 6.99, 7.0, 10.0]), (3.0, 7.0)
+        )
+        self.assertEqual(result.tolist(), [0, 0, 1, 1, 2, 2])
+
     def test_error_metrics(self) -> None:
         result = error_metrics(
             np.array([10.0, 20.0]),
