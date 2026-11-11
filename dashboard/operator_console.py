@@ -731,7 +731,20 @@ def render():
         )
     monitor()
     state = pipeline.status(ROOT)
+    releases = state.get("releases") or {}
+    if not releases and state.get("active"):
+        releases = {state["active"].get("label", "현재 결과"): state["active"]}
+    order = [d["name"] for d in pipeline.datasets(cfg) if d["name"] in releases]
+    order += [n for n in releases if n not in order]
     release = state.get("active") or {}
+    if len(order) > 1:
+        with st.sidebar:
+            choice = st.selectbox("데이터 묶음", order, key="operator_dataset",
+                                  help="묶음마다 따로 계산한 결과입니다. 실측이 있는 묶음에서만 "
+                                       "실행 운전·정산이 보입니다.")
+        release = releases[choice]
+    elif order:
+        release = releases[order[0]]
     screens = ["요약", "운영계획", "예측 입력", "예상 수익", "실적·정산", "실행 상태"]
     legacy_screens = {"운영 관제": "요약", "2 운영계획·입찰안": "운영계획",
                       "1 예측 입력": "예측 입력", "3 예상 수익": "예상 수익",
