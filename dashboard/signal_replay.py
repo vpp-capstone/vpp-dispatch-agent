@@ -29,7 +29,7 @@ def render_signal(
         forecastLabel=forecast_label,
         actualLabel=actual_label,
         deltaLabel="계획 금액 차이 · 실제 손익 아님" if kind == "revenue" else "예측 − 실측",
-        note="실측을 미리 안 계획은 비교용 재최적화 결과입니다. 실제 운전·정산은 미구현입니다."
+        note="실측을 미리 안 계획은 비교용 재최적화 결과입니다. 실행 수익은 따로 봅니다."
         if kind == "revenue"
         else "같은 시각의 저장된 예측과 실측을 비교합니다. 빈 시각을 0으로 채우지 않습니다.",
     )

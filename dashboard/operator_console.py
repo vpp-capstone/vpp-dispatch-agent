@@ -572,8 +572,8 @@ def show_profit(data, day):
             fig.update_layout(height=240, yaxis_title="만 원", margin=dict(t=10, b=10),
                               paper_bgcolor="#fff", plot_bgcolor="#fff")
             st.plotly_chart(fig, width="stretch")
-    st.caption("REC는 ESS 없이 판매해도 받습니다. "
-               "실제 실행·편차 정산 수익은 아직 계산하지 않습니다.")
+    st.caption("REC는 ESS 없이 판매해도 받습니다. 확정 계획을 실측에 적용한 실행 수익은 "
+               "실측이 있는 기간에만 '계산 기준'에서 따로 봅니다.")
     with st.expander("정확한 금액과 계산 범위"):
         table = pd.DataFrame({
             "항목": ["SMP 판매", "REC", "열화비 (차감)", "순수익", "ESS 추가수익"],
@@ -698,9 +698,10 @@ def show_execution(state, release):
         st.json(release.get("hashes", {}))
     st.markdown("**계산에 아직 없는 부분**")
     st.write(
-        "확정 판매계획을 실측에 적용한 실행 운전·정산, 실제 SOC 이월은 아직 미구현입니다. "
-        "종료 SOC 정책은 변경하지 않았습니다. "
-        "REC 초기 저장분 제외도 미구현이며 실험 가정을 유지합니다. "
+        "실행 운전·정산과 실행 SOC 이월은 실측(발전량·SMP)이 있는 기간에만 계산합니다. "
+        "정산 가격은 하루전·실시간 자료가 없어 실측 SMP 로 둔 실험 가정이고, "
+        "부족·초과 배수 1·벌칙 0 도 근거 없는 기본값입니다. "
+        "발전량 예측 정산금·용량정산금·REC 초기 저장분 제외는 미구현입니다. "
         "팀원 모델의 학습·추론은 각 담당자가 돌리고 결과 파일만 공유받습니다."
     )
 

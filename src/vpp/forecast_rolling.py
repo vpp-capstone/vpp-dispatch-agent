@@ -4,7 +4,8 @@ run_rolling 은 기간 전체의 시간별 값 한 줄을 받아 창을 자르�
 다르다. 그래서 계획일 D 마다 그 날의 PlanWindow(forecast_inputs)를 solve_window 에 넣고
 앞 24시간(D)만 확정한 뒤, 확정 구간 끝 에너지를 다음 계획일의 시작 에너지로 넘긴다.
 
-- 이월하는 것은 **계획상** SOC 다. 실측에 따른 실행 조정·정산은 하지 않는다 (다음 단계).
+- 이월하는 것은 **계획상** SOC 다. 실측에 따른 실행 조정·정산·실행 SOC 이월은 execution_rolling 이
+  맡는다 (이 모듈의 forecast/actual 비교 쌍은 그대로 둔다).
 - scenario="forecast" 는 window.forecast(예측 발전량·예측 가격), "actual" 은 window.actual
   (실측 발전량·실측 SMP)을 넣는다. 같은 창 목록·ESS 설정·최초 SOC·종료 정책으로 돌려 비교한다.
 - 계획일이 끊기면 연속 구간(segment)으로 나누고, 구간마다 설정값 SOC 에서 다시 시작한다.
