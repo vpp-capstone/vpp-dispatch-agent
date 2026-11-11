@@ -1,9 +1,9 @@
-"""담당: 대시보드 통합 — 팀 Drive 에서 받은 예측 결과 파일 → MILP → 화면.
+"""대시보드 통합 — 팀 Drive 에서 받은 예측 결과 파일 → MILP → 화면.
 
 팀원이 모델을 바꾸면 결과 파일(발전량 parquet, SMP csv)을 Drive 로 공유하고 각자 같은 경로에 둔다.
 이 모듈은 그 파일과 ESS·REC 설정, 최적화 코드의 **내용**이 바뀌었을 때만 비교 백테스트와 48시간
 운영계획을 다시 풀고, 검산을 통과한 결과를 화면의 공통 결과로 올린다. 모델 학습·추론은 하지 않는다
-(담당자가 돌려 공유한다). Git 커밋·푸시, 다운로드도 하지 않는다.
+(담당자가 돌려 공유한다). 
 
     python -m vpp.operator_pipeline      # 한 번 실행. 대시보드가 열려 있으면 30초마다 변경 확인
 """
@@ -249,6 +249,17 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
                 - ess.charge_efficiency * row.charge_mwh
                 + row.discharge_mwh / ess.discharge_efficiency
             )
+        # 실행 운전 결과가 계획일 바로 전날까지 있으면 그 **실행** 종료 잔량이 오늘 시작값이다.
+        # (실측이 없는 기간은 계획상 잔량. 날짜가 끊기면 이월하지 않는다.)
+        execution = read_json(backtest / "summary.json").get("execution") or {}
+        executed_until = execution.get("last_executed_day")
+        if execution.get("available") and executed_until == str(
+            last_day - pd.Timedelta(days=1)
+        ):
+            start_energy = float(execution["last_executed_final_energy_mwh"])
+            start_soc_source = "executed"
+        else:
+            start_soc_source = "planned" if start_energy is not None else "config"
     plan = run_operating_plan(
         windows[-1].planning_day,
         **common,
@@ -284,12 +295,13 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         if backtest else False,
         "generation_availability_verified": False,
         "start_soc_note": "ESS 설정 시작 잔량",
+        "start_soc_source": start_soc_source,
     }
-    result["start_soc_note"] = (
-        "비교 계획의 시작 잔량 (실제 실행 SOC 아님)"
-        if start_energy is not None
-        else "ESS 설정 시작 잔량 (이전 실행 SOC 없음)"
-    )
+    result["start_soc_note"] = {
+        "executed": "전날 실행 운전의 종료 잔량 (확정 계획을 실측에 적용한 결과)",
+        "planned": "비교 계획의 시작 잔량 (실제 실행 SOC 아님)",
+        "config": "ESS 설정 시작 잔량 (이전 실행 SOC 없음)",
+    }[start_soc_source]
     result["output_hashes"] = {
         str(p): digest(p)
         for folder in (plan, backtest)

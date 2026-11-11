@@ -1,4 +1,4 @@
-"""담당: 최적화 — 예측 기반 ESS 계획과 완전예측(실측) 계획을 같은 조건으로 돌려 비교하는 CLI.
+"""최적화 — 예측 기반 ESS 계획과 완전예측(실측) 계획을 같은 조건으로 돌려 비교하는 CLI.
 
     python -m vpp.forecast_backtest --start 2024-06-05 --end 2024-06-11 \
         [--solar <parquet>] [--wind <parquet>] [--smp <csv>] [--ess config/ess_v0.yaml] \
@@ -37,11 +37,14 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from vpp import execution_rolling as xr
 from vpp import forecast_inputs as fi
 from vpp.backtest import _json_default, _write_json, new_run_dir
+from vpp.execution import load_policy
 from vpp.forecast_rolling import (
     COMMIT_HOURS,
     SegmentResult,
+    TerminalValue,
     compare_daily,
     run_scenario,
     soc_trace,
@@ -49,11 +52,20 @@ from vpp.forecast_rolling import (
 from vpp.operating_plan import resolve_ess
 from vpp.optimization import EssParams
 from vpp.rec import RecParams, load_rec, rec_metadata
+from vpp.settlement import load_settlement
 from vpp.validation import check_plan
 
 MODE = "forecast_vs_perfect_foresight_plan"
 DEFAULT_START = date(2024, 6, 5)
 DEFAULT_END = date(2024, 6, 11)
+DEFAULT_EXECUTION_CONFIG = Path("config/execution_v0.yaml")
+REVENUE_CONCEPTS = {
+    "planned_forecast": "예측으로 만든 계획의 예상 수익 (예측이 맞았다고 가정). scenarios.forecast",
+    "executed": "확정 판매계획을 실측에 적용한 실행 수익 (실험용 정산 가정). "
+                "execution.scenarios.executed",
+    "perfect_foresight": "실측을 미리 알고 다시 최적화한 비교 계획 수익. 실제 운영에선 불가능. "
+                         "scenarios.actual",
+}
 
 LIMITATIONS = [
     "예측 기반 계획의 수익은 예측 발전량·예측 SMP가 맞았다고 가정한 계획 수익이다. "
@@ -73,7 +85,70 @@ LIMITATIONS = [
     "이다. vpp.backtest 가 쓰는 원본 합산과 이상치 처리 기준이 다를 수 있다.",
     "완전예측 비교 계획도 입찰 낙찰·편차 페널티·열화(기본 k=0)·출력제어 상한을 반영하지 않는다.",
     "ESS 가정값(config/ess_v0.yaml)은 설비 사양이 아니다.",
+    "execution.* 은 확정 판매계획을 실측에 적용한 실행 운전(규칙 방식, 수익 최적 아님)과 실험용 "
+    "정산(하루전·편차 가격 모두 실측 SMP, 배수 1·벌칙 0)의 결과다. 실제 시장 규칙이 아니며 "
+    "실측·정산 가격이 없는 기간은 계산하지 않는다 (execution.available=false).",
 ]
+
+
+def _execution_block(
+    windows: list[fi.PlanWindow], ess: EssParams, rec: RecParams | None, *,
+    execution_path: str | Path | None, terminal_mode: str, terminal_value: TerminalValue | None,
+    gap_reasons: dict, terminal_comparison: bool,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, pd.DataFrame | None, list[dict]]:
+    """실측이 있는 창으로 실행 사슬 세 가지: 실행 SOC 이월(수정안)·기존 계획 방식·ESS 미사용."""
+    policy = load_policy(execution_path)
+    settlement = load_settlement(execution_path)
+    common = dict(rec=rec, policy=policy, settlement=settlement, gap_reasons=gap_reasons)
+    runs = {
+        "executed": xr.run_execution_scenario(
+            windows, ess, scenario="executed", plan_soc_source="executed",
+            terminal_mode=terminal_mode, terminal_value=terminal_value, **common,
+        ),
+        "legacy_plan_executed": xr.run_execution_scenario(
+            windows, ess, scenario="legacy_plan_executed", plan_soc_source="planned",
+            terminal_mode="last_day_only", **common,
+        ),
+        "no_ess_executed": xr.run_execution_scenario(
+            windows, ess, scenario="no_ess_executed", rec=rec, settlement=settlement,
+            gap_reasons=gap_reasons,
+        ),
+    }
+    hourly = pd.concat([xr.stack_exec_hourly(r) for r in runs.values()], ignore_index=True)
+    daily = pd.concat([xr.stack_exec_daily(r) for r in runs.values()], ignore_index=True)
+    totals = {name: xr.execution_scenario_totals(r) for name, r in runs.items()}
+    checks = [
+        {"scenario": name, "segment_id": seg.segment_id, "checks": seg.checks,
+         "all_passed": all(c["passed"] for c in seg.checks)}
+        for name, r in runs.items() for seg in r
+    ]
+    comparison = None
+    if terminal_comparison:
+        comparison = xr.compare_terminal_policies(windows, ess, **common)
+    exe = totals["executed"]
+    summary = {
+        "available": True,
+        "basis": settlement.basis,
+        "note": "가정 기반 실행 수익: 하루전·편차 정산 가격을 실측 SMP 로 대체. 실제 정산 아님",
+        "policy": policy.metadata(),
+        "settlement": settlement.metadata(),
+        "terminal_mode": terminal_mode,
+        "terminal_value": None if terminal_value is None else terminal_value.metadata(),
+        "scenarios": totals,
+        "ess_gain_vs_no_ess_realized_krw": (
+            None if exe["realized_net_krw"] is None
+            else exe["realized_net_krw"] - totals["no_ess_executed"]["realized_net_krw"]
+        ),
+        "legacy_vs_new_realized_krw": (
+            None if exe["realized_net_krw"] is None
+            else exe["realized_net_krw"] - totals["legacy_plan_executed"]["realized_net_krw"]
+        ),
+        "last_executed_day": str(daily.loc[daily.scenario == "executed", "planning_day"].max()),
+        "last_executed_final_energy_mwh": float(
+            daily.loc[daily.scenario == "executed", "executed_final_energy_mwh"].iloc[-1]
+        ),
+    }
+    return summary, hourly, daily, comparison, checks
 
 
 # ---------------------------------------------------------------- 결과 합치기
@@ -273,10 +348,24 @@ def run_forecast_backtest(
     out_dir: str | Path = "data/processed/backtest",
     run_id: str | None = None,
     overwrite: bool = False,
+    execution_path: str | Path | None = None,
+    terminal_mode: str = "horizon_aware",
+    terminal_value_fraction: float | None = None,
+    terminal_comparison: bool = False,
 ) -> Path:
-    """예측·실측 두 시나리오를 같은 창·ESS·열화비·REC 설정으로 풀고 결과 폴더 경로를 돌려준다."""
+    """예측·실측 두 시나리오를 같은 창·ESS·열화비·REC 설정으로 풀고 결과 폴더 경로를 돌려준다.
+
+    실측이 있으면 실행 운전·정산(execution.*)도 계산한다. execution_path 는 실행 정책·정산 설정
+    YAML (None 이면 config/execution_v0.yaml 이 있을 때 그것, 없으면 기본값). terminal_mode /
+    terminal_value_fraction 은 실행 사슬의 계획 종료 정책 (forecast_rolling.window_terminal).
+    기존 forecast/actual 시나리오는 그대로 last_day_only 로 둔다 (회귀 비교용).
+    """
     ess = resolve_ess(ess_path, degradation_path)  # 운영계획과 같은 설정 해석
     rec: RecParams | None = load_rec(rec_path)
+    if execution_path is None and DEFAULT_EXECUTION_CONFIG.exists():
+        execution_path = DEFAULT_EXECUTION_CONFIG
+    terminal_value = (None if terminal_value_fraction is None
+                      else TerminalValue(fraction=terminal_value_fraction))
     pred = fi.load_generation_predictions(solar_path, wind_path, plants_path)
     portfolio = fi.aggregate_portfolio(pred, fi.expected_assets(plants_path))
     smp = fi.load_smp_forecast(smp_path)
@@ -304,10 +393,24 @@ def run_forecast_backtest(
     plans = plan_checks(forecast, ess)
     compare: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
+    execution: dict[str, Any] = {
+        "available": False,
+        "note": "실측 발전량·실측 SMP 가 없어 실행 운전·정산을 계산하지 않았다 (예측값 대체 없음)",
+    }
+    exec_hourly = exec_daily = terminal_table = None
+    exec_checks: list[dict[str, Any]] = []
     if actual is not None:
         compare = comparison_checks(forecast, actual, ess)
         warnings = comparison_warnings(forecast, actual)
         plans += plan_checks(actual, ess)
+        gap_reasons = {
+            r["planning_day"]: r["reason"] for r in excluded.to_dict("records")
+        }
+        execution, exec_hourly, exec_daily, terminal_table, exec_checks = _execution_block(
+            windows, ess, rec, execution_path=execution_path, terminal_mode=terminal_mode,
+            terminal_value=terminal_value, gap_reasons=gap_reasons,
+            terminal_comparison=terminal_comparison,
+        )
 
     run_id = run_id or f"forecast_{start}_{end}"
     out = new_run_dir(out_dir, run_id, overwrite)
@@ -319,6 +422,12 @@ def run_forecast_backtest(
                                                encoding="utf-8-sig")
         comparison_figure(forecast, actual, ess).write_html(out / "comparison.html",
                                                             include_plotlyjs="cdn")
+        exec_hourly.to_csv(out / "hourly_execution.csv", index=False, encoding="utf-8-sig")
+        exec_daily.to_csv(out / "daily_execution.csv", index=False, encoding="utf-8-sig")
+        if terminal_table is not None:
+            terminal_table.to_csv(out / "terminal_policy_comparison.csv", index=False,
+                                  encoding="utf-8-sig")
+            execution["terminal_policy_comparison"] = terminal_table.to_dict("records")
     else:
         stack_daily(forecast).to_csv(out / "daily_forecast.csv", index=False,
                                      encoding="utf-8-sig")
@@ -349,6 +458,8 @@ def run_forecast_backtest(
             totals["forecast"]["planned_objective_krw"] - totals["actual"]["planned_objective_krw"]
         ),
         "planned_objective_diff_note": "예측이 맞았다고 가정한 계획 수익의 차이. 실제 손익 아님",
+        "revenue_concepts": REVENUE_CONCEPTS,
+        "execution": execution,
         "rec": rec_metadata(rec),
         # 구간 시작 저장분을 전부 팔았을 때 붙을 수 있는 REC 의 보수적 상한 (구간마다 실제 시작
         # 잔량 × 그 구간의 최고 가산). 보정값.
@@ -382,6 +493,8 @@ def run_forecast_backtest(
         "comparison_warnings": warnings,
         "plan_checks": plans,
         "plan_checks_all_passed": all(p["all_passed"] for p in plans),
+        "execution_checks": exec_checks,
+        "execution_checks_all_passed": all(c["all_passed"] for c in exec_checks),
         "data_checks": {
             "windows_built": int(len(all_windows)),
             "comparable_windows": int(comparable_count),
@@ -415,11 +528,23 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 run-id 결과 폴더 덮어쓰기 허용")
+    parser.add_argument("--execution-config", default=None,
+                        help="실행 정책·정산 설정 YAML (기본 config/execution_v0.yaml)")
+    parser.add_argument("--terminal-mode", default="horizon_aware",
+                        choices=("last_day_only", "horizon_aware"),
+                        help="실행 사슬 계획의 종료 조건 적용 시점")
+    parser.add_argument("--terminal-value-fraction", type=float, default=None,
+                        help="종료 조건 없는 창 끝 잔량 평가 비율(0~1). 없으면 평가 안 함")
+    parser.add_argument("--terminal-comparison", action="store_true",
+                        help="종료 정책 네 가지를 같은 조건으로 비교한 표를 추가로 만든다")
     args = parser.parse_args(argv)
     out = run_forecast_backtest(
         args.start, args.end, solar_path=args.solar, wind_path=args.wind, smp_path=args.smp,
         plants_path=args.plants, ess_path=args.ess, degradation_path=args.degradation_config,
         rec_path=args.rec, out_dir=args.out, run_id=args.run_id, overwrite=args.overwrite,
+        execution_path=args.execution_config, terminal_mode=args.terminal_mode,
+        terminal_value_fraction=args.terminal_value_fraction,
+        terminal_comparison=args.terminal_comparison,
     )
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))
@@ -432,6 +557,8 @@ def main(argv: list[str] | None = None) -> None:
     failed = [c for c in validation["comparison_checks"] if not c["passed"]]
     if not validation["plan_checks_all_passed"]:
         failed.append({"item": "plan_checks_all_passed", "passed": False})
+    if not validation.get("execution_checks_all_passed", True):
+        failed.append({"item": "execution_checks_all_passed", "passed": False})
     if failed:
         print("❌ 비교 조건·검산 불일치:")
         for c in failed:
