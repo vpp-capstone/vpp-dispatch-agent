@@ -64,14 +64,15 @@ def load_generation_eval_frame(
     plants_path: Path = fi.PLANT_MASTER_PATH,
 ) -> pd.DataFrame:
     """평가용 발전소별 행. 실측·기준 예측 열이 없으면 NaN 으로 둔다 (평가 불가 건수로 집계)."""
-    pred = pd.concat([pd.read_parquet(solar_path), pd.read_parquet(wind_path)], ignore_index=True)
+    pred = pd.concat([fi.normalize_generation_model(pd.read_parquet(p))
+                      for p in (solar_path, wind_path)], ignore_index=True)
     missing = [c for c in GENERATION_EVAL_COLUMNS if c not in pred.columns]
     if missing:
         raise ValueError(f"발전량 예측 파일에 평가에 필요한 열이 없습니다: {missing}")
     for col in GENERATION_OPTIONAL:
         if col not in pred.columns:
             pred[col] = np.nan
-    cols = GENERATION_EVAL_COLUMNS + list(GENERATION_OPTIONAL)
+    cols = GENERATION_EVAL_COLUMNS + list(GENERATION_OPTIONAL) + ["forecast_source_column"]
     return fi.validate_generation_predictions(pred[cols], fi.expected_assets(plants_path))
 
 

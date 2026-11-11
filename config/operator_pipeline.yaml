@@ -1,0 +1,14 @@
+# 대시보드 자동 계산 설정. 팀 Drive 에서 받은 예측 결과 파일이 아래 경로에 있으면 된다.
+# 파일 내용·ESS·REC 설정·최적화 코드가 바뀌었을 때만 MILP(비교 백테스트 + 48시간 운영계획)를
+# 다시 푼다. 모델 학습·추론, 다운로드, Git 커밋·푸시는 하지 않는다.
+auto_refresh: true
+poll_seconds: 30
+ess: config/ess_v0_1.yaml
+rec: config/rec_v0.yaml          # 비우면 REC 미적용
+plants: data/reference/plant_location_master_21.csv
+# 발전량 담당 공유 parquet (improved_generation_kwh 열이 있으면 그 열을, 없으면 lightgbm 열을 쓴다)
+solar: artifacts/predictions/solar_validation_predictions.parquet
+wind: artifacts/predictions/wind_validation_predictions.parquet
+# SMP 담당 공유 csv
+smp: data/processed/forecast/smp_forecast.csv
+output: data/processed/operator_pipeline

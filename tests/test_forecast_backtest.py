@@ -4,6 +4,7 @@ import json
 from datetime import date, timedelta
 
 import pandas as pd
+import pytest
 import yaml
 
 from tests.test_forecast_inputs import SOLAR, WIND, make_predictions, make_smp
@@ -74,6 +75,43 @@ def test_cli_run_writes_outputs_and_passes_checks(tmp_path):
     diff = summary["scenarios"]["forecast"]["planned_objective_krw"] - \
         summary["scenarios"]["actual"]["planned_objective_krw"]
     assert summary["planned_objective_diff_krw"] == diff
+
+
+def test_rec_config_splits_revenue_and_applies_to_both_scenarios(tmp_path):
+    """--rec: 두 시나리오 모두 REC 가산으로 풀고 요약에 판매(SMP)·REC·열화비·ESS 없음 대비 분리."""
+    write_inputs(tmp_path, DAYS)
+    rec_yaml = tmp_path / "rec.yaml"
+    rec_yaml.write_text(yaml.safe_dump({"weight": 1.0, "price_krw_per_rec": 70000}),
+                        encoding="utf-8")
+    common = dict(solar_path=tmp_path / "solar.parquet", wind_path=tmp_path / "wind.parquet",
+                  smp_path=tmp_path / "smp.csv", plants_path=tmp_path / "plants.csv",
+                  ess_path=tmp_path / "ess.yaml", out_dir=tmp_path / "out")
+    base = json.loads((fb.run_forecast_backtest(DAYS[0], DAYS[-1], run_id="base", **common)
+                       / "summary.json").read_text(encoding="utf-8"))
+    out = fb.run_forecast_backtest(DAYS[0], DAYS[-1], run_id="rec", rec_path=rec_yaml, **common)
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))
+    assert validation["comparison_all_passed"] and validation["plan_checks_all_passed"]
+    assert summary["rec"]["enabled"] and summary["rec"]["pricing"]["price_krw_per_rec"] == 70000
+    assert summary["inputs"]["rec_config"] == str(rec_yaml)
+    assert base["rec"]["enabled"] is False and base["scenarios"]["actual"]["rec_revenue_krw"] == 0
+    for key in ("forecast", "actual"):
+        t = summary["scenarios"][key]
+        assert t["rec_revenue_krw"] > 0
+        assert t["planned_objective_krw"] == pytest.approx(
+            t["sales_revenue_krw"] + t["rec_revenue_krw"] - t["throughput_cost_krw"])
+        assert t["ess_gain_vs_no_ess_krw"] == pytest.approx(
+            t["planned_objective_krw"] - t["no_ess_net_revenue_krw"])
+        assert t["terminal_constraint_cost_krw"] >= 0
+        hourly = pd.read_csv(out / f"hourly_{key}.csv")
+        assert (hourly["rec_krw_per_mwh"] == 70000).all()
+        assert t["rec_revenue_krw"] == pytest.approx(70000 * hourly["sell_mwh"].sum())
+    assert summary["initial_energy_rec_upper_bound_krw"] > 0
+    # REC 는 발전량에 붙는 돈: 합성 입력에선 감축이 없어 ESS 없음 수익이 정확히 REC 만큼 는다
+    delta_no_ess = (summary["scenarios"]["actual"]["no_ess_net_revenue_krw"]
+                    - base["scenarios"]["actual"]["no_ess_net_revenue_krw"])
+    gen = summary["scenarios"]["actual"]["generation_mwh"]
+    assert delta_no_ess == pytest.approx(70000 * gen)
 
 
 def test_days_without_actual_are_compared_out_not_planned_out(tmp_path):

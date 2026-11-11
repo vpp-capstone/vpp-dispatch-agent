@@ -11,8 +11,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from vpp.baselines import plan_revenue_krw
 from vpp.forecast_rolling import soc_trace
 from vpp.optimization import EssParams, Terminal, plan_window
+from vpp.rec import REC_COLUMN
 from vpp.validation import check_plan
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,10 +78,16 @@ CSS = """
 
 # =============================== 결과 로딩 (순수 함수) ===============================
 
+BACKTEST_MODES = ("forecast_vs_perfect_foresight_plan",
+                  "perfect_foresight_backtest_not_live_bidding")
+
+
 def list_runs(base: Path = BACKTEST_DIR) -> list[Path]:
+    """백테스트 결과 폴더만 (summary.mode 로 거른다. 운영계획 결과가 섞여 있어도 열지 않는다)."""
     if not base.exists():
         return []
-    runs = [p for p in base.iterdir() if (p / "summary.json").exists()]
+    runs = [p for p in base.iterdir()
+            if (p / "summary.json").exists() and run_mode(p) in BACKTEST_MODES]
     return sorted(runs, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
@@ -136,7 +144,10 @@ def baseline_day(run: dict[str, Any], day, name: str) -> pd.DataFrame | None:
     rows = base[base["date"] == day].reset_index(drop=True)
     if rows.empty:
         return None
-    out = rows[["ts", "generation_mwh", "price_krw_per_mwh"]].copy()
+    keep = ["ts", "generation_mwh", "price_krw_per_mwh"]
+    if REC_COLUMN in rows.columns:
+        keep.append(REC_COLUMN)  # 기준 방식 수익에도 REC 를 넣어야 MILP 와 공정하게 비교된다
+    out = rows[keep].copy()
     for col in ("sell_mwh", "charge_mwh", "discharge_mwh", "curtailment_mwh", "energy_end_mwh"):
         out[col] = rows[f"{name}_{col}"].to_numpy()
     return out
@@ -165,10 +176,8 @@ def degradation_choices() -> dict[str, dict[str, Any]]:
 
 
 def net_revenue(plan: pd.DataFrame, ess: EssParams) -> float:
-    """판매수익 − 열화비. 열화비는 ESS 열화모델의 비용 함수로만 계산한다."""
-    return float(plan["price_krw_per_mwh"] @ plan["sell_mwh"]) - ess.degradation_cost_krw(
-        plan["charge_mwh"], plan["discharge_mwh"]
-    )
+    """판매수익(SMP) + REC 수익(열이 있을 때) − 열화비. CLI 집계와 같은 함수(baselines)를 쓴다."""
+    return plan_revenue_krw(plan, ess)
 
 
 def plan_stats(plan: pd.DataFrame, ess: EssParams) -> dict[str, float]:

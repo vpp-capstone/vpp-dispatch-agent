@@ -77,6 +77,10 @@ Git에 들어 있는 데이터는 `data/reference/`와 `data/sample/`뿐이다. 
 
 ## 설치·실행
 
+운영자 화면과 로컬 모델 자동 실행은 [운영 대시보드 안내](docs/operator_dashboard.md)를 참고하세요.
+`dashboard/app.py`는 코드·입력 변경을 확인해 예측 → MILP → 검산 → 화면 갱신을 연결합니다.
+원본이 없으면 실행 상태에 누락 자료를 표시하며, 기존 예측 결과와 새 모델 결과를 구분합니다.
+
 Python 3.11 이상.
 
 ```bash
@@ -91,6 +95,13 @@ python -m uvicorn api.main:app --reload        # API 문서 http://localhost:800
 python -m vpp.pipeline --date 2026-01-03       # CLI (모듈 연결 후 동작)
 pytest                                       # PR 전에 한 번
 ```
+
+ESS 계산 CLI 3개(`vpp.operating_plan` 운영계획, `vpp.forecast_backtest` 예측 vs 완전예측 비교,
+`vpp.backtest` 실측 백테스트)는 공통 옵션 `--ess config/ess_v0.yaml`,
+`--degradation-config config/ess_v0_1.yaml`(열화비), `--rec config/rec_v0.yaml`(REC 수익 가정,
+없으면 미적용)을 받는다. 대시보드 사이드바의 ESS·열화비·REC 선택이 같은 인수로 들어간다.
+REC 는 판매 1 MWh 당 1회·단일 가중치·시나리오 단가의 **가정값**이며 ESS 없음 기준에도 같이 적용된다
+(`docs/formulation.md` §2).
 
 끄는 건 `Ctrl + C`.
 `data/sample/hourly.csv`는 화면 확인용 샘플.
