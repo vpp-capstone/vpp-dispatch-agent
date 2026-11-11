@@ -238,7 +238,7 @@ def file_identity(path: str | Path) -> dict[str, Any]:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             digest.update(chunk)
     return {
-        "path": str(p), "size_bytes": stat.st_size,
+        "path": p.as_posix(), "size_bytes": stat.st_size,
         "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
         "sha256": digest.hexdigest(),
     }

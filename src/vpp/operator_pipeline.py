@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -20,6 +19,12 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 import yaml
 
@@ -33,13 +38,42 @@ ENGINE_FILES = (  # 이 코드가 바뀌면 결과가 달라지므로 다시 푼
 )
 
 
+def _prepare_windows_lock(stream: TextIO) -> None:
+    """Windows byte-range locks require an existing byte to lock."""
+    if os.fstat(stream.fileno()).st_size == 0:
+        stream.write("\0")
+        stream.flush()
+    stream.seek(0)
+
+
+def _lock_shared(stream: TextIO) -> None:
+    if os.name == "nt":
+        _prepare_windows_lock(stream)
+        msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+    else:
+        fcntl.flock(stream, fcntl.LOCK_SH)
+
+
+def _lock_exclusive(stream: TextIO, *, blocking: bool) -> None:
+    if os.name == "nt":
+        _prepare_windows_lock(stream)
+        mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+        try:
+            msvcrt.locking(stream.fileno(), mode, 1)
+        except OSError as exc:
+            raise BlockingIOError from exc
+    else:
+        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        fcntl.flock(stream, flags)
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
 def read_json(path: Path, default=None):
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {} if default is None else default
 
@@ -47,12 +81,17 @@ def read_json(path: Path, default=None):
 def atomic_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+    tmp.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     tmp.replace(path)
 
 
 def config(root: Path = ROOT) -> dict:
-    cfg = yaml.safe_load((root / "config/operator_pipeline.yaml").read_text())
+    cfg = yaml.safe_load(
+        (root / "config/operator_pipeline.yaml").read_text(encoding="utf-8")
+    )
     for name in (*INPUT_KEYS, "output"):
         if cfg.get(name):
             cfg[name] = str((root / cfg[name]).resolve())
@@ -71,7 +110,7 @@ def _rec_table(root: Path, rec_path: str | None) -> Path | None:
     """REC 설정이 월별 단가표를 가리키면 그 경로 (표 내용이 바뀌어도 다시 풀어야 한다)."""
     if not rec_path or not Path(rec_path).exists():
         return None
-    raw = yaml.safe_load(Path(rec_path).read_text()) or {}
+    raw = yaml.safe_load(Path(rec_path).read_text(encoding="utf-8")) or {}
     if not raw.get("price_table"):
         return None
     table = Path(raw["price_table"])
@@ -267,10 +306,10 @@ def run(root: Path = ROOT) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     # A UI launcher publishes queued state before the child starts writing state.
     with (out / "launch.lock").open("a") as launch_lock:
-        fcntl.flock(launch_lock, fcntl.LOCK_SH)
+        _lock_shared(launch_lock)
     with (out / "worker.lock").open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_exclusive(lock, blocking=False)
         except BlockingIOError:
             return status(root)
         fingerprint = revision(root, cfg)
@@ -324,7 +363,7 @@ def launch(root: Path = ROOT, *, force=False) -> dict:
     out = Path(cfg["output"])
     out.mkdir(parents=True, exist_ok=True)
     with (out / "launch.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        _lock_exclusive(lock, blocking=True)
         state = status(root)
         if state.get("state") in ("queued", "running"):
             try:
