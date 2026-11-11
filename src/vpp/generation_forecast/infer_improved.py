@@ -16,15 +16,34 @@ import pandas as pd
 from vpp.generation_forecast.improved_model import predict_rows
 from vpp.generation_forecast.model import add_wind_change_features
 
+DELIVERY_COLUMNS = [
+    "asset_id",
+    "energy_type",
+    "capacity_kw",
+    "planning_day_kst",
+    "issue_time_utc",
+    "available_before_bid_deadline",
+    "valid_time_utc",
+    "valid_time_kst",
+    "lead_hour",
+    "forecast_day_offset",
+    "improved_generation_kwh",
+]
+
 
 def prepare_inference(raw: pd.DataFrame, bundle: dict, start: str, end: str) -> pd.DataFrame:
     frame = raw.copy()
     ts = pd.to_datetime(frame.valid_time_kst, utc=True).dt.tz_convert("Asia/Seoul")
     if pd.Timestamp(start).year <= max(bundle["training_years"]):
         raise ValueError("학습에 사용한 연도로 미래 예측 성능을 평가할 수 없습니다.")
-    # Include the second day of the final planning window.
-    mask = (ts.dt.date >= pd.Timestamp(start).date()) & (
-        ts.dt.date <= (pd.Timestamp(end) + pd.Timedelta(days=1)).date()
+    if "planning_day_kst" in frame:
+        planning_day = pd.to_datetime(frame["planning_day_kst"]).dt.date
+    elif "forecast_day_offset" in frame:
+        planning_day = (ts - pd.to_timedelta(frame["forecast_day_offset"], unit="D")).dt.date
+    else:
+        planning_day = ts.dt.date
+    mask = (planning_day >= pd.Timestamp(start).date()) & (
+        planning_day <= pd.Timestamp(end).date()
     )
     frame = frame.loc[mask].copy()
     if frame.empty:
@@ -45,6 +64,22 @@ def prepare_inference(raw: pd.DataFrame, bundle: dict, start: str, end: str) -> 
     return frame
 
 
+def delivery_frame(result: pd.DataFrame) -> pd.DataFrame:
+    """Return only operational inputs; never export generation labels or raw features."""
+    optional = [
+        column
+        for column in (
+            "improved_generation_p10_kwh",
+            "improved_generation_p50_kwh",
+            "improved_generation_p90_kwh",
+            "model_version",
+            "trained_until",
+        )
+        if column in result
+    ]
+    return result[DELIVERY_COLUMNS + optional].copy()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, required=True)
@@ -61,7 +96,9 @@ def main():
         result = predict_rows(bundle, frame)
         result["model_version"] = "improved_production"
         result["trained_until"] = f"{max(bundle['training_years'])}-12-31"
-        result.to_parquet(args.output / f"{kind}_improved_predictions.parquet", index=False)
+        delivery_frame(result).to_parquet(
+            args.output / f"{kind}_improved_predictions.parquet", index=False
+        )
 
 
 if __name__ == "__main__":

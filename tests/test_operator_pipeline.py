@@ -8,7 +8,7 @@ import pytest
 from tests.test_forecast_backtest import DAYS, write_inputs
 from vpp import forecast_inputs as fi
 from vpp import operator_pipeline as op
-from vpp.generation_forecast.infer_improved import prepare_inference
+from vpp.generation_forecast.infer_improved import delivery_frame, prepare_inference
 
 
 def test_improved_values_override_old_column_but_not_fill_gaps():
@@ -102,6 +102,50 @@ def test_inference_keeps_missing_labels_and_uses_training_category_map():
     assert pd.isna(frame.generation_kwh.iloc[0])
     with pytest.raises(ValueError, match="학습"):
         prepare_inference(raw, bundle, "2024-01-01", "2024-12-31")
+
+
+def test_inference_filters_by_planning_day_not_overlapping_valid_day():
+    raw = pd.DataFrame(
+        {
+            "valid_time_kst": [
+                "2025-01-01T00:00:00+09:00",
+                "2025-01-01T00:00:00+09:00",
+                "2026-01-01T00:00:00+09:00",
+            ],
+            "planning_day_kst": ["2024-12-31", "2025-01-01", "2025-12-31"],
+            "asset_id": ["a", "a", "a"],
+            "gfs_grid_id": ["g", "g", "g"],
+        }
+    )
+    bundle = {
+        "training_years": [2023, 2024],
+        "category_maps": {"asset_id": {"a": 0}, "gfs_grid_id": {"g": 0}},
+    }
+    frame = prepare_inference(raw, bundle, "2025-01-01", "2025-12-31")
+    assert frame.planning_day_kst.tolist() == ["2025-01-01", "2025-12-31"]
+
+
+def test_inference_delivery_excludes_labels_and_raw_weather():
+    result = pd.DataFrame(
+        {
+            **{column: [1] for column in (
+                "asset_id", "energy_type", "capacity_kw", "planning_day_kst",
+                "issue_time_utc", "available_before_bid_deadline", "valid_time_utc",
+                "valid_time_kst", "lead_hour", "forecast_day_offset",
+                "improved_generation_kwh",
+            )},
+            "generation_kwh": [999.0],
+            "label_is_valid": [True],
+            "wind_speed_80m_ms": [7.0],
+            "model_version": ["improved_production"],
+            "trained_until": ["2024-12-31"],
+        }
+    )
+    delivery = delivery_frame(result)
+    assert "generation_kwh" not in delivery
+    assert "label_is_valid" not in delivery
+    assert "wind_speed_80m_ms" not in delivery
+    assert delivery.model_version.iloc[0] == "improved_production"
 
 
 def test_run_uses_shared_files_and_blocks_when_one_is_missing(tmp_path, monkeypatch):
