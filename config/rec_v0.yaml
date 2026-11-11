@@ -1,0 +1,10 @@
+# REC(신재생에너지 공급인증서) 수익 가정 v0. 실제 계약·발급 기준이 아니다 (실험 가정).
+# 산식: REC 수익 = 계통 판매 전력량(MWh) × weight × 단가(원/REC, 1 REC = 1 MWh), 판매 시점에 1회.
+# 목적함수에는 판매 단가 가산(SMP + weight × 단가)으로 들어가고 ESS 없음 기준에도 같이 적용된다.
+status: experiment_assumption_not_contract
+eligible_basis: sold_mwh_once      # 계통 판매 1 MWh 당 1회. 충전분에는 안 붙고 방전 판매분에 붙는다
+weight: 1.0                        # 포트폴리오 단일 가중치 (태양광·풍력 분리는 2차)
+
+# 단가는 아래 둘 중 하나만.
+price_krw_per_rec: 70000           # 단일 시나리오 단가 (원/REC). 실제 월별 단가 확보 전 자리값
+# price_table: config/rec_price_monthly_v0.csv   # 월별 단가표 (month,price_krw_per_rec). 빈 월은 오류

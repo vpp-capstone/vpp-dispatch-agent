@@ -9,8 +9,11 @@ run_rolling 은 기간 전체의 시간별 값 한 줄을 받아 창을 자르�
   (실측 발전량·실측 SMP)을 넣는다. 같은 창 목록·ESS 설정·최초 SOC·종료 정책으로 돌려 비교한다.
 - 계획일이 끊기면 연속 구간(segment)으로 나누고, 구간마다 설정값 SOC 에서 다시 시작한다.
 - 종료 정책은 run_rolling 의 rolling48 과 같다: 구간 마지막 계획일은 D 24시간만 풀고
-  E[끝] ≥ 구간 시작 에너지 제약을 건다 (초기 저장분을 팔아 만든 수익 분리).
+  E[끝] ≥ 구간 시작 에너지 제약을 건다 (초기 저장분을 팔아 만든 수익 분리). 그 제약을 풀었을 때
+  늘어나는 계산상 수익은 terminal_constraint_cost_krw 로 따로 적는다 (못 판 잔량의 기회비용 포함.
+  실제 충전 비용이 아니므로 참고 지표).
 - 합계(수익·충방전·판매량)는 확정한 24시간만 집계한다. D+1 미확정 계획은 넣지 않는다.
+- rec(vpp.rec.RecParams)를 주면 두 시나리오 모두 같은 REC 가산 열을 붙여 푼다.
 """
 
 from __future__ import annotations
@@ -23,7 +26,14 @@ import numpy as np
 import pandas as pd
 
 from vpp.forecast_inputs import PlanWindow, contiguous_segments
-from vpp.optimization import EssParams, RollingResult, Terminal, plan_window
+from vpp.optimization import (
+    EssParams,
+    RollingResult,
+    Terminal,
+    plan_window,
+    terminal_constraint_cost_krw,
+)
+from vpp.rec import RecParams
 
 SCENARIOS = ("forecast", "actual")
 COMMIT_HOURS = 24
@@ -41,7 +51,7 @@ class SegmentResult:
     sources: list[dict[str, Any]] = field(default_factory=list)
 
 
-def _inputs(window: PlanWindow, scenario: str) -> pd.DataFrame:
+def _inputs(window: PlanWindow, scenario: str, rec: RecParams | None = None) -> pd.DataFrame:
     if scenario not in SCENARIOS:
         raise ValueError(f"scenario 는 {SCENARIOS} 중 하나여야 합니다: {scenario!r}")
     frame = window.forecast if scenario == "forecast" else window.actual
@@ -54,7 +64,7 @@ def _inputs(window: PlanWindow, scenario: str) -> pd.DataFrame:
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"{scenario} 창에 열이 없습니다: {sorted(missing)}")
-    return frame
+    return frame if rec is None else rec.apply(frame)
 
 
 def run_segment(
@@ -63,6 +73,7 @@ def run_segment(
     scenario: str,
     *,
     segment_id: int = 0,
+    rec: RecParams | None = None,
     tol: float = 1e-6,
 ) -> SegmentResult:
     """연속 계획일 창 목록을 순서대로 풀어 확정 계획을 잇는다. 끊긴 구간이 섞이면 예외."""
@@ -77,8 +88,9 @@ def run_segment(
     hourly_parts: list[pd.DataFrame] = []
     daily_rows: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
+    terminal_cost = 0.0
     for window_id, window in enumerate(segment):
-        frame = _inputs(window, scenario)
+        frame = _inputs(window, scenario, rec)
         is_last = window_id == len(segment) - 1
         # 백테스트 구간 종료 규칙: 마지막 계획일은 D 24시간만 풀고 E[끝] ≥ 구간 시작 에너지
         # (run_rolling 의 rolling48 과 동일). 그 외는 48h 풀고 24h 확정. 운영계획은 이 규칙을
@@ -86,6 +98,10 @@ def run_segment(
         block = frame.iloc[:COMMIT_HOURS] if is_last else frame
         terminal = Terminal.period_end_ge_initial(period_start_energy) if is_last else Terminal()
         plan = plan_window(block, ess, start, commit_hours=COMMIT_HOURS, terminal=terminal, tol=tol)
+        if is_last:
+            terminal_cost = terminal_constraint_cost_krw(
+                block, ess, start, plan, commit_hours=COMMIT_HOURS, tol=tol,
+            )
         committed = plan.committed.drop(columns="committed")
         committed["window_id"] = window_id
         committed["planning_day"] = window.planning_day
@@ -120,16 +136,18 @@ def run_segment(
         hourly=hourly, daily=daily, policy="rolling48", horizon_hours=48.0,
         commit_hours=float(COMMIT_HOURS), period_initial_energy_mwh=period_start_energy,
         period_final_energy_mwh=start, checks=checks,
+        terminal_constraint_cost_krw=terminal_cost,
     )
     return SegmentResult(scenario, segment_id, days[0], days[-1], result, sources)
 
 
 def run_scenario(
-    windows: list[PlanWindow], ess: EssParams, scenario: str, *, tol: float = 1e-6
+    windows: list[PlanWindow], ess: EssParams, scenario: str, *,
+    rec: RecParams | None = None, tol: float = 1e-6,
 ) -> list[SegmentResult]:
     """창 목록을 연속 구간으로 나눠 각각 설정값 SOC 에서 시작해 푼다."""
     return [
-        run_segment(segment, ess, scenario, segment_id=i, tol=tol)
+        run_segment(segment, ess, scenario, segment_id=i, rec=rec, tol=tol)
         for i, segment in enumerate(contiguous_segments(windows))
     ]
 
@@ -167,9 +185,9 @@ def compare_daily(forecast: list[SegmentResult], actual: list[SegmentResult]) ->
         daily["segment_start"] = prev_final.isna()
         daily["carry_gap_mwh"] = daily["initial_energy_mwh"] - prev_final
         cols = ["planning_day", "segment_id", "segment_start", "initial_energy_mwh",
-                "final_energy_mwh", "carry_gap_mwh", "sales_revenue_krw", "throughput_cost_krw",
-                "objective_krw", "generation_mwh", "sell_mwh", "charge_mwh", "discharge_mwh",
-                "curtailment_mwh"]
+                "final_energy_mwh", "carry_gap_mwh", "sales_revenue_krw", "rec_revenue_krw",
+                "throughput_cost_krw", "objective_krw", "no_ess_same_curtailment_policy_krw",
+                "generation_mwh", "sell_mwh", "charge_mwh", "discharge_mwh", "curtailment_mwh"]
         out = daily[cols]
         return out.rename(columns={c: f"{c}_{suffix}" for c in cols if c != "planning_day"})
 

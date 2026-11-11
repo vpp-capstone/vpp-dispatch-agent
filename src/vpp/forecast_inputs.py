@@ -70,6 +70,24 @@ class PlanWindow:
 # ---------------------------------------------------------------- 입력 로딩
 
 
+def normalize_generation_model(frame: pd.DataFrame) -> pd.DataFrame:
+    """Use the improved model when supplied; never fill its gaps with the old model.
+
+    The legacy column remains an internal compatibility name for existing metrics.
+    ``forecast_source_column`` records which values were actually selected.
+    """
+    out = frame.copy()
+    selected = ("improved_generation_kwh" if "improved_generation_kwh" in out
+                else "lightgbm_generation_kwh")
+    if selected not in out:
+        raise ValueError(
+            "발전량 예측 열이 없습니다: improved_generation_kwh / lightgbm_generation_kwh"
+        )
+    out["lightgbm_generation_kwh"] = pd.to_numeric(out[selected], errors="raise")
+    out["forecast_source_column"] = selected
+    return out
+
+
 def expected_assets(plants_path: Path = PLANT_MASTER_PATH) -> dict[str, set[str]]:
     """기준정보의 발전원별 asset_id 집합 (태양광 18, 풍력 3)."""
     plants = pd.read_csv(plants_path, encoding="utf-8-sig")
@@ -85,14 +103,14 @@ def load_generation_predictions(
 
     실측 열(generation_kwh)은 선택이다. 없으면 NaN 열을 붙여 계획은 만들고 비교만 제외한다.
     """
-    frames = [pd.read_parquet(solar_path), pd.read_parquet(wind_path)]
+    frames = [normalize_generation_model(pd.read_parquet(p)) for p in (solar_path, wind_path)]
     pred = pd.concat(frames, ignore_index=True)
     missing = [c for c in GENERATION_COLUMNS if c not in pred.columns]
     if missing:
         raise ValueError(f"발전량 예측 파일에 열이 없습니다: {missing}")
     if GENERATION_ACTUAL_COLUMN not in pred.columns:
         pred[GENERATION_ACTUAL_COLUMN] = float("nan")
-    cols = GENERATION_COLUMNS + [GENERATION_ACTUAL_COLUMN]
+    cols = GENERATION_COLUMNS + [GENERATION_ACTUAL_COLUMN, "forecast_source_column"]
     return validate_generation_predictions(pred[cols], expected_assets(plants_path))
 
 
