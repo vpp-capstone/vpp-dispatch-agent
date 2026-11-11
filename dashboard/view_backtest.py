@@ -19,7 +19,7 @@ from legacy_views import (
     render_resources_tab,
     render_validation_tab,
 )
-from settings import BACKTEST_OUT_DIR, Settings, settings_chips
+from settings import BACKTEST_OUT_DIR, Settings, rec_diff, settings_chips
 from ui import (
     FORECAST_MODE,
     MAN,
@@ -35,6 +35,7 @@ from ui import (
     timeline_figure,
     unit,
 )
+from view_operating_plan import revenue_caption
 from vpp.forecast_backtest import run_forecast_backtest
 
 
@@ -45,21 +46,22 @@ def render_forecast_run(run: dict[str, Any], day) -> None:
     plan_ok = v.get("plan_checks_all_passed", False)
     cmp_ok = v.get("comparison_all_passed", False)
     diff = s["planned_objective_diff_krw"]
+    rec_applied = (s.get("rec") or {}).get("enabled", False)
 
     plan_only = s.get("comparison_excluded_days", 0)
     plan_only_text = f" · 실측 없어 비교 제외 {plan_only}일" if plan_only else ""
     st.markdown(f'<span class="jf-tag">계획일 {s["days"]}일 · 예측 부족 제외 {s["excluded_days"]}일'
-                f'{plan_only_text} · {s["start"]} ~ {s["end"]}</span>', unsafe_allow_html=True)
+                f'{plan_only_text} · {s["start"]} ~ {s["end"]} · '
+                f'{"REC 적용(가정)" if rec_applied else "REC 미적용"}</span>',
+                unsafe_allow_html=True)
     man = unit("만 원")
     n_pass = sum(chk["passed"] for chk in compare)
     all_ok = cmp_ok and plan_ok
     cards = [
         kpi("예측 기반 계획 수익", f"{tf['planned_objective_krw'] / MAN:,.0f}{man}",
-            f"판매 {tf['sales_revenue_krw'] / MAN:,.0f} − 열화비 "
-            f"{tf['throughput_cost_krw'] / MAN:,.0f}만 원", "flat", "🔮", "#F5F3FF"),
+            revenue_caption(tf, digits=0) + "만 원", "flat", "🔮", "#F5F3FF"),
         kpi("완전예측 계획 수익", f"{ta['planned_objective_krw'] / MAN:,.0f}{man}",
-            f"판매 {ta['sales_revenue_krw'] / MAN:,.0f} − 열화비 "
-            f"{ta['throughput_cost_krw'] / MAN:,.0f}만 원", "flat", "🎯"),
+            revenue_caption(ta, digits=0) + "만 원", "flat", "🎯"),
         kpi("계획 수익 차이", f"{diff / MAN:+,.0f}{man}", "실제 손익 아님",
             "up" if diff >= 0 else "down", "Δ", "#FFF7ED"),
         kpi("비교 조건·검산", f"{n_pass} / {len(compare)}",
@@ -68,6 +70,21 @@ def render_forecast_run(run: dict[str, Any], day) -> None:
     ]
     for col, card in zip(st.columns(4), cards, strict=True):
         col.markdown(card, unsafe_allow_html=True)
+    if "ess_gain_vs_no_ess_krw" in ta:
+        # ESS 한계이익: 같은 판매 가치(SMP+REC)로 ESS 없이 팔았을 때와의 차이. 라이언님이 물은
+        # '정답값으로 운영했을 때 ESS 가 더 벌어주는 돈'이 완전예측 쪽 값이다.
+        g_a, g_f = ta["ess_gain_vs_no_ess_krw"], tf["ess_gain_vs_no_ess_krw"]
+        term = ta.get("terminal_constraint_cost_krw", 0.0) or 0.0
+        rec_note = (" REC 는 ESS 없이 팔아도 받으므로 전체 REC 수익이 곧 ESS 추가수익은 아니다 "
+                    "(저장 손실·감축량 변화만큼만 달라진다)."
+                    if rec_applied else "")
+        st.markdown(
+            f'<div class="note">🔋 <b>ESS 없음 대비 추가수익</b> · 완전예측(실측) '
+            f'<b>{g_a / MAN:+,.0f}만 원</b> / 예측 기반 {g_f / MAN:+,.0f}만 원 — '
+            f'ESS 없음 수익 {ta["no_ess_net_revenue_krw"] / MAN:,.0f}만 원(실측 기준)과의 차이. '
+            f'참고: 구간 끝 종료 조건을 풀면 계산상 {term / MAN:,.1f}만 원 더 나온다 '
+            f'(못 판 잔량의 기회비용 포함, 실제 충전 비용 아님).{rec_note}</div>',
+            unsafe_allow_html=True)
     if not cmp_ok:
         bad = ", ".join(chk["item"] for chk in compare if not chk["passed"])
         st.error(f"두 시나리오의 비교 조건이 일치하지 않습니다: {bad}")
@@ -135,6 +152,12 @@ def render_forecast_run(run: dict[str, Any], day) -> None:
         if "throughput_cost_krw_forecast" in daily:
             cols["열화비(예측)"] = daily["throughput_cost_krw_forecast"]
             cols["열화비(실측)"] = daily["throughput_cost_krw_actual"]
+        if "rec_revenue_krw_actual" in daily and daily["rec_revenue_krw_actual"].abs().sum() > 0:
+            cols["REC 수익(예측)"] = daily["rec_revenue_krw_forecast"]
+            cols["REC 수익(실측)"] = daily["rec_revenue_krw_actual"]
+        if "no_ess_same_curtailment_policy_krw_actual" in daily:
+            cols["ESS 없음 대비(실측)"] = (daily["objective_krw_actual"]
+                                      - daily["no_ess_same_curtailment_policy_krw_actual"])
         cols.update({
             "충전(예측)": daily["charge_mwh_forecast"], "충전(실측)": daily["charge_mwh_actual"],
             "방전(예측)": daily["discharge_mwh_forecast"],
@@ -171,7 +194,7 @@ def applied_vs_current(summary: dict[str, Any], settings: Settings) -> list[str]
                 "throughput_cost_krw_per_mwh"):
         if summary.get("ess", {}).get(key) != cur[key]:
             diffs.append(f"{key} {summary.get('ess', {}).get(key)} → {cur[key]}")
-    return diffs
+    return diffs + rec_diff(summary, settings)
 
 
 def render(settings: Settings, bundle: dict[str, Any] | None) -> None:
@@ -198,7 +221,7 @@ def render(settings: Settings, bundle: dict[str, Any] | None) -> None:
                     settings.start, settings.end, solar_path=settings.solar,
                     wind_path=settings.wind, smp_path=settings.smp, plants_path=settings.plants,
                     ess_path=settings.ess_path, degradation_path=settings.degradation_path,
-                    out_dir=BACKTEST_OUT_DIR, run_id=run_id,
+                    rec_path=settings.rec_path, out_dir=BACKTEST_OUT_DIR, run_id=run_id,
                 )
                 st.session_state["bt_folder"] = str(out)
                 st.session_state["bt_run_folder"] = out  # 방금 만든 결과를 바로 표시

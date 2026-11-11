@@ -1,4 +1,4 @@
-"""사이드바 공통 설정: 데이터 묶음 · 날짜/기간 · ESS 설정 · 열화비 설정.
+"""사이드바 공통 설정: 데이터 묶음 · 날짜/기간 · ESS 설정 · 열화비 설정 · REC 설정.
 
 값은 파일(예측 결과, config YAML)에서 읽기만 하고 어떤 파일도 고치지 않는다. 설정을 바꿔도 계산은
 각 탭의 '이 설정으로 실행' 버튼을 눌러야 돈다. 여기서 하는 계산은 파일 읽기·창 구성뿐이며 캐시된다.
@@ -19,10 +19,12 @@ from vpp import forecast_inputs as fi
 from vpp import forecast_metrics as fm
 from vpp.operating_plan import resolve_ess
 from vpp.optimization import EssParams
+from vpp.rec import RecParams
 
 OPERATING_PLAN_DIR = Path(os.environ.get("VPP_OPERATING_PLAN_DIR",
                                          ROOT / "data/processed/operating_plan"))
 BACKTEST_OUT_DIR = Path(os.environ.get("VPP_BACKTEST_DIR", ROOT / "data/processed/backtest"))
+NO_REC_LABEL = "REC 미적용"
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ class Settings:
     planning_day: date | None
     start: date | None
     end: date | None
+    rec_path: Path | None = None  # None 이면 REC 미적용
+    rec_label: str = NO_REC_LABEL
 
     @property
     def files(self) -> dict[str, Path]:
@@ -59,7 +63,25 @@ class Settings:
             "ess_path": str(self.ess_path),
             "degradation_path": str(self.degradation_path or self.ess_path),
             "ess": self.ess().to_dict(),
+            "rec_path": None if self.rec_path is None else str(self.rec_path),
         }
+
+
+def rec_choices() -> dict[str, Path | None]:
+    """REC 선택지: {표시 이름: 설정 경로}. config/rec*.yaml 을 읽기만 한다."""
+    out: dict[str, Path | None] = {NO_REC_LABEL: None}
+    for path in sorted(CONFIG_DIR.glob("rec*.yaml")):
+        try:
+            rec = RecParams.from_yaml(path)
+        except (ValueError, OSError) as exc:  # 깨진 설정은 선택지에서 사유와 함께 제외
+            out[f"{path.name} (읽기 실패: {str(exc)[:40]})"] = None
+            continue
+        pricing = rec.metadata()["pricing"]
+        price = (f"{pricing['price_krw_per_rec']:,.0f}원/REC 시나리오"
+                 if pricing["type"] == "flat_scenario"
+                 else f"월별표 {pricing['first_month']}~{pricing['last_month']}")
+        out[f"REC 적용 ({path.name}, 가중치 {rec.weight:g}, {price})"] = path
+    return out
 
 
 @st.cache_data(show_spinner="예측 파일을 읽고 계획일 창을 만드는 중")
@@ -133,9 +155,15 @@ def render_sidebar() -> tuple[Settings, dict[str, Any] | None]:
                    f"SOC {ess.soc_min:.0%}~{ess.soc_max:.0%} · 시작 {ess.soc_initial:.0%} · "
                    f"효율 {ess.charge_efficiency:.2f} · 열화 {ess.degradation_model} "
                    f"{ess.throughput_cost_krw_per_mwh:,.0f}원/MWh")
+        recs = rec_choices()
+        rec_label = st.radio("REC 수익", list(recs), index=0, key="set_rec",
+                             help="config/rec*.yaml 의 가정값 (판매 1 MWh 당 1회, 단일 가중치). "
+                                  "MILP 와 ESS 없음 기준 모두에 판매 단가 가산으로 들어간다. "
+                                  "실제 계약·발급 기준이 아니다.")
+        rec_path = recs[rec_label]
 
         draft = Settings(solar, wind, smp, plants, Path(ess_path), degradation_path, deg_label,
-                         None, None, None)
+                         None, None, None, rec_path, rec_label)
         missing = draft.missing_files()
         bundle = None
         if missing:
@@ -169,8 +197,21 @@ def render_sidebar() -> tuple[Settings, dict[str, Any] | None]:
         st.caption(f"결과 저장: `{_short(OPERATING_PLAN_DIR)}` · `{_short(BACKTEST_OUT_DIR)}`")
 
     settings = Settings(solar, wind, smp, plants, Path(ess_path), degradation_path, deg_label,
-                        planning_day, start, end)
+                        planning_day, start, end, rec_path, rec_label)
     return settings, bundle
+
+
+def rec_diff(summary: dict[str, Any], settings: Settings) -> list[str]:
+    """표시 중인 결과의 REC 설정과 현재 사이드바 REC 설정의 차이 (없으면 빈 목록)."""
+    applied = summary.get("rec") or {"enabled": False}
+    if not applied.get("enabled"):
+        return [] if settings.rec_path is None else [f"REC 미적용 → {settings.rec_path.name}"]
+    if settings.rec_path is None:
+        return [f"REC {Path(applied.get('source', '?')).name} → 미적용"]
+    current = RecParams.from_yaml(settings.rec_path).metadata()
+    same = all(applied.get(k) == current.get(k) for k in ("weight", "eligible_basis", "pricing"))
+    return [] if same else [f"REC {Path(applied.get('source', '?')).name} → "
+                            f"{settings.rec_path.name} (값 다름)"]
 
 
 def settings_chips(settings: Settings, *, show_day: bool = False,
@@ -181,5 +222,6 @@ def settings_chips(settings: Settings, *, show_day: bool = False,
     if show_period and settings.start and settings.end:
         parts.append(f"기간 {settings.start} ~ {settings.end}")
     parts += [f"ESS {settings.ess_path.name}", f"열화비 {settings.degradation_label}",
+              settings.rec_label,
               f"예측 {settings.solar.name} · {settings.wind.name} · {settings.smp.name}"]
     return "".join(f'<span class="chip" style="background:#374151">{p}</span>' for p in parts)

@@ -2,9 +2,13 @@
 
     python -m vpp.forecast_backtest --start 2024-06-05 --end 2024-06-11 \
         [--solar <parquet>] [--wind <parquet>] [--smp <csv>] [--ess config/ess_v0.yaml] \
+        [--degradation-config config/ess_v0_1.yaml] [--rec config/rec_v0.yaml] \
         [--out data/processed/backtest] [--run-id <이름>] [--overwrite]
 
 같은 run-id 폴더가 있으면 기본은 덮어쓰지 않는다 (--overwrite 로만 허용).
+--rec 를 주면 REC 수익 가정(vpp.rec)이 두 시나리오 모두에 판매 단가 가산으로 들어가고, 요약에
+판매수익(SMP)·REC 수익·열화비가 나뉘어 나온다. 'ESS 없음 대비 추가수익'은 같은 가산을 적용한
+ESS 없음 수익과의 차이다.
 
 출력: <out>/<실행ID>/
     hourly_forecast.csv, hourly_actual.csv   시나리오별 확정 24시간 계획 (계획일·구간 표시)
@@ -42,6 +46,7 @@ from vpp.forecast_rolling import (
 )
 from vpp.operating_plan import resolve_ess
 from vpp.optimization import EssParams
+from vpp.rec import RecParams, load_rec, rec_metadata
 from vpp.validation import check_plan
 
 MODE = "forecast_vs_perfect_foresight_plan"
@@ -52,6 +57,12 @@ LIMITATIONS = [
     "예측 기반 계획의 수익은 예측 발전량·예측 SMP가 맞았다고 가정한 계획 수익이다. "
     "실측 적용·정산을 하지 않았으므로 두 시나리오 차이는 실제 손익이 아니다.",
     "SOC 이월은 계획상 값이다. 실측에 따른 충·방전 실행 조정과 실제 SOC 재계산은 다음 단계.",
+    "REC 는 --rec 를 줄 때만 가정값(판매 1 MWh 당 1회, 단일 가중치, 시나리오 단가)으로 넣는다. "
+    "실제 발급 기준·계약 형태가 아니다. 구간 시작 저장분이 팔릴 때도 REC 가 붙는다(제외 미구현). "
+    "그 보수적 상한을 initial_energy_rec_upper_bound_krw 에 따로 적는다.",
+    "terminal_constraint_cost_krw 는 구간 마지막 날의 종료 제약(E[끝] ≥ 구간 시작 에너지)을 풀었을 "
+    "때 늘어나는 계산상 수익이다. 남겨 둔 잔량을 못 판 기회비용이 포함되므로 실제 충전 비용이 "
+    "아니며, 순수익에 더해 사이클 수익으로 해석하면 안 된다 (참고 지표).",
     "발전량 예측 파일에는 공개시각 플래그가 없어 D-2 18 UTC 발표분의 D-1 11:00 KST 이전 공개를 "
     "행 단위로 확인하지 못했다 (generation_availability_verified=false).",
     "2024년 발전량 예측은 모델 선택(조기 종료)에 쓴 검증 구간이라 성능이 실제보다 좋게 보일 수 "
@@ -77,19 +88,30 @@ def stack_daily(results: list[SegmentResult]) -> pd.DataFrame:
 
 
 def scenario_totals(results: list[SegmentResult]) -> dict[str, Any]:
+    """시나리오 합계. 순수익 = 판매(SMP) + REC − 열화비. ESS 없음 수익은 같은 판매 가치
+    (SMP+REC)로 같은 시간에 ESS 없이 팔았을 때이며, 그 차이가 'ESS 없음 대비 추가수익'이다."""
     daily = stack_daily(results)
+    objective = float(daily["objective_krw"].sum())
+    no_ess = float(daily["no_ess_same_curtailment_policy_krw"].sum())
     return {
         "days": int(len(daily)),
         "segments": [
             {"segment_id": r.segment_id, "start": r.start_day.isoformat(),
              "end": r.end_day.isoformat(), "days": int(len(r.result.daily)),
              "initial_energy_mwh": r.result.period_initial_energy_mwh,
-             "final_energy_mwh": r.result.period_final_energy_mwh}
+             "final_energy_mwh": r.result.period_final_energy_mwh,
+             "terminal_constraint_cost_krw": r.result.terminal_constraint_cost_krw}
             for r in results
         ],
-        "planned_objective_krw": float(daily["objective_krw"].sum()),
+        "planned_objective_krw": objective,
         "sales_revenue_krw": float(daily["sales_revenue_krw"].sum()),
+        "rec_revenue_krw": float(daily["rec_revenue_krw"].sum()),
         "throughput_cost_krw": float(daily["throughput_cost_krw"].sum()),
+        "no_ess_net_revenue_krw": no_ess,
+        "ess_gain_vs_no_ess_krw": objective - no_ess,
+        "terminal_constraint_cost_krw": float(sum(
+            r.result.terminal_constraint_cost_krw or 0.0 for r in results
+        )),
         "generation_mwh": float(daily["generation_mwh"].sum()),
         "sell_mwh": float(daily["sell_mwh"].sum()),
         "charge_mwh": float(daily["charge_mwh"].sum()),
@@ -245,12 +267,14 @@ def run_forecast_backtest(
     plants_path: Path = fi.PLANT_MASTER_PATH,
     ess_path: str | Path = "config/ess_v0.yaml",
     degradation_path: str | Path | None = None,
+    rec_path: str | Path | None = None,
     out_dir: str | Path = "data/processed/backtest",
     run_id: str | None = None,
     overwrite: bool = False,
 ) -> Path:
-    """예측·실측 두 시나리오를 같은 창·같은 ESS·열화비 설정으로 풀고 결과 폴더 경로를 돌려준다."""
+    """예측·실측 두 시나리오를 같은 창·ESS·열화비·REC 설정으로 풀고 결과 폴더 경로를 돌려준다."""
     ess = resolve_ess(ess_path, degradation_path)  # 운영계획과 같은 설정 해석
+    rec: RecParams | None = load_rec(rec_path)
     pred = fi.load_generation_predictions(solar_path, wind_path, plants_path)
     portfolio = fi.aggregate_portfolio(pred, fi.expected_assets(plants_path))
     smp = fi.load_smp_forecast(smp_path)
@@ -270,8 +294,8 @@ def run_forecast_backtest(
             f"비교할 수 있는 창이 없습니다. 제외 사유: {excluded.to_dict('records')}"
         )
 
-    forecast = run_scenario(windows, ess, "forecast")
-    actual = run_scenario(windows, ess, "actual")
+    forecast = run_scenario(windows, ess, "forecast", rec=rec)
+    actual = run_scenario(windows, ess, "actual", rec=rec)
     hourly_f, hourly_a = stack_hourly(forecast), stack_hourly(actual)
     daily = compare_daily(forecast, actual)
     compare = comparison_checks(forecast, actual, ess)
@@ -307,10 +331,20 @@ def run_forecast_backtest(
             totals["forecast"]["planned_objective_krw"] - totals["actual"]["planned_objective_krw"]
         ),
         "planned_objective_diff_note": "예측이 맞았다고 가정한 계획 수익의 차이. 실제 손익 아님",
+        "rec": rec_metadata(rec),
+        # 구간 시작 저장분을 전부 팔았을 때 붙을 수 있는 REC 의 보수적 상한 (구간마다 실제 시작
+        # 잔량 × 그 구간의 최고 가산). 보정값.
+        "initial_energy_rec_upper_bound_krw": (
+            0.0 if rec is None
+            else float(sum(rec.initial_energy_rec_upper_bound_krw(
+                ess, r.result.hourly["ts"],
+                initial_energy_mwh=r.result.period_initial_energy_mwh) for r in actual))
+        ),
         "inputs": {
             "solar_predictions": str(solar_path), "wind_predictions": str(wind_path),
             "smp_forecast": str(smp_path), "plants": str(plants_path), "ess": str(ess_path),
             "degradation_config": str(degradation_path or ess_path),
+            "rec_config": None if rec_path is None else str(rec_path),
             "generation_forecast_issue": "D-2 18 UTC (GFS), forecast_day_offset 0·1",
             "smp_forecast_issue": "D-1 11:00 KST, horizon 1·2",
             "window_sources": [s for r in forecast for s in r.sources],
@@ -354,6 +388,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--degradation-config", default=None,
                         help="열화비 설정만 가져올 YAML (예: config/ess_v0_1.yaml). "
                              "없으면 --ess 값")
+    parser.add_argument("--rec", default=None,
+                        help="REC 수익 가정 YAML (예: config/rec_v0.yaml). 없으면 REC 미적용")
     parser.add_argument("--out", default="data/processed/backtest")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--overwrite", action="store_true",
@@ -362,7 +398,7 @@ def main(argv: list[str] | None = None) -> None:
     out = run_forecast_backtest(
         args.start, args.end, solar_path=args.solar, wind_path=args.wind, smp_path=args.smp,
         plants_path=args.plants, ess_path=args.ess, degradation_path=args.degradation_config,
-        out_dir=args.out, run_id=args.run_id, overwrite=args.overwrite,
+        rec_path=args.rec, out_dir=args.out, run_id=args.run_id, overwrite=args.overwrite,
     )
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))

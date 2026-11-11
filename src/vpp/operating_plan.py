@@ -1,7 +1,7 @@
 """담당: 최적화 — 계획일 D 의 ESS 운영계획 생성 (예측만으로 48시간을 풀고 D 24시간을 확정).
 
     python -m vpp.operating_plan --day 2024-06-05 [--ess config/ess_v0.yaml]
-        [--degradation-config config/ess_v0_1.yaml]
+        [--degradation-config config/ess_v0_1.yaml] [--rec config/rec_v0.yaml]
         [--start-soc 0.5 | --start-energy-mwh 8.0 | --from-plan <이전 결과 폴더>]
         [--solar <parquet>] [--wind <parquet>] [--smp <csv>] [--plants <csv>]
         [--out data/processed/operating_plan] [--run-id <이름>] [--overwrite]
@@ -12,8 +12,8 @@
 출력: <out>/<run_id>/
     plan_48h.csv        D 00시~D+1 23시 48행. status=committed(D 24시간) / provisional(D+1 24시간)
     committed_24h.csv   확정한 D 24시간
-    summary.json        합계(판매수익·열화비·차감 후 계획 수익), 시작 SOC 와 출처,
-                        입력 파일 식별정보, 코드 버전, 예측 발표시점, ESS·열화비 설정, 종료 정책
+    summary.json        합계(판매수익·REC 수익·열화비·차감 후 계획 수익), 시작 SOC 와 출처,
+                        입력 파일 식별정보, 코드 버전, 예측 발표시점, ESS·열화비·REC 설정, 종료 정책
     validation.json     제약 검산 (48시간 전체, 확정 24시간)
 
 시작 SOC 는 계획 대상일 시작 시점의 **입력값**이다 (기본: ESS 설정의 soc_initial). --from-plan 으로
@@ -41,6 +41,7 @@ from vpp import forecast_inputs as fi
 from vpp.backtest import _json_default, _write_json, new_run_dir
 from vpp.forecast_inputs import PlanWindow
 from vpp.optimization import EssParams, Terminal, WindowPlan, plan_window
+from vpp.rec import RecParams, load_rec, rec_metadata
 from vpp.validation import check_plan
 
 MODE = "operating_plan_forecast_only"
@@ -50,6 +51,8 @@ START_SOURCES = ("config_soc_initial", "user_input", "previous_plan")
 
 LIMITATIONS = [
     "계획 수익은 예측 발전량·예측 SMP 가 맞았다고 가정한 값이다. 실측 적용·정산·편차 페널티 없음.",
+    "REC 는 --rec 를 줄 때만 가정값(판매 1 MWh 당 1회, 단일 가중치, 시나리오 단가)으로 넣는다. "
+    "실제 발급 기준·계약 형태가 아니다.",
     "D+1 24시간은 잠정(provisional) 계획이며 다음 날 새 예측으로 다시 푼다. 합계에 넣지 않는다.",
     "시작 SOC 는 입력값(설정 또는 이전 계획의 계획상 값)이다. 실제 배터리 상태를 읽지 않는다.",
     "발전량 예측 파일에 공개시각 플래그가 없어 입찰 마감 전 가용 여부를 행 단위로 확인하지 못한다.",
@@ -165,13 +168,19 @@ def build_day_window(
 
 
 def generate_plan(
-    window: PlanWindow, ess: EssParams, start: StartEnergy, *, tol: float = 1e-6
+    window: PlanWindow, ess: EssParams, start: StartEnergy, *,
+    rec: RecParams | None = None, tol: float = 1e-6,
 ) -> WindowPlan:
-    """48시간을 풀고 앞 24시간을 확정한다. 종료 제약 없음(운영). 실측은 쓰지 않는다."""
+    """48시간을 풀고 앞 24시간을 확정한다. 종료 제약 없음(운영). 실측은 쓰지 않는다.
+
+    rec 를 주면 예측 창에 REC 가산 열을 붙여 판매 단가 가산으로 푼다.
+    """
     forecast = window.forecast
     hours = float(forecast["dt_hours"].sum())
     if hours != SOLVE_HOURS:
         raise ValueError(f"운영계획은 48시간 창이 필요합니다: {hours}h")
+    if rec is not None:
+        forecast = rec.apply(forecast)
     return plan_window(
         forecast, ess, start.energy_mwh, commit_hours=COMMIT_HOURS, terminal=Terminal(), tol=tol,
     )
@@ -229,7 +238,7 @@ def file_identity(path: str | Path) -> dict[str, Any]:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             digest.update(chunk)
     return {
-        "path": str(p), "size_bytes": stat.st_size,
+        "path": p.as_posix(), "size_bytes": stat.st_size,
         "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
         "sha256": digest.hexdigest(),
     }
@@ -260,6 +269,7 @@ def run_operating_plan(
     *,
     ess_path: str | Path = "config/ess_v0.yaml",
     degradation_path: str | Path | None = None,
+    rec_path: str | Path | None = None,
     start_soc: float | None = None,
     start_energy_mwh: float | None = None,
     from_plan: str | Path | None = None,
@@ -273,6 +283,7 @@ def run_operating_plan(
 ) -> Path:
     """운영계획을 만들고 저장한다. CLI 와 대시보드가 같이 쓴다. 결과 폴더 경로를 돌려준다."""
     ess = resolve_ess(ess_path, degradation_path)
+    rec = load_rec(rec_path)
     start = resolve_start_energy(
         ess, planning_day, start_soc=start_soc, start_energy_mwh=start_energy_mwh,
         from_plan=from_plan,
@@ -281,7 +292,7 @@ def run_operating_plan(
         planning_day, solar_path=solar_path, wind_path=wind_path, smp_path=smp_path,
         plants_path=plants_path,
     )
-    plan = generate_plan(window, ess, start)
+    plan = generate_plan(window, ess, start, rec=rec)
     full, committed = plan_tables(plan)
     validation = plan_validation(plan, ess)
 
@@ -325,10 +336,18 @@ def run_operating_plan(
             "smp_forecast": file_identity(smp_path),
             "plants": file_identity(plants_path),
             "ess_config": file_identity(ess_path),
+            "rec_config": None if rec_path is None else file_identity(rec_path),
             "actual_used": False,
         },
         "ess": {**ess.to_dict(), "degradation": plan.degradation, "source": str(ess_path),
                 "degradation_source": str(degradation_path or ess_path)},
+        "rec": rec_metadata(rec),
+        # 실제 시작 잔량(--start-soc/--from-plan 반영) × 방전 효율 × 48시간 최고 가산. 보정값.
+        "initial_energy_rec_upper_bound_krw": (
+            0.0 if rec is None
+            else rec.initial_energy_rec_upper_bound_krw(
+                ess, full["ts"], initial_energy_mwh=start.energy_mwh)
+        ),
         "limitations": LIMITATIONS,
     }
     _write_json(out / "summary.json", summary)
@@ -344,6 +363,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--degradation-config", default=None,
                         help="열화비 설정만 가져올 YAML (예: config/ess_v0_1.yaml). "
                              "없으면 --ess 값")
+    parser.add_argument("--rec", default=None,
+                        help="REC 수익 가정 YAML (예: config/rec_v0.yaml). 없으면 REC 미적용")
     start = parser.add_mutually_exclusive_group()
     start.add_argument("--start-soc", type=float, default=None, help="시작 SOC (0~1)")
     start.add_argument("--start-energy-mwh", type=float, default=None, help="시작 에너지 (MWh)")
@@ -360,7 +381,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     out = run_operating_plan(
         args.day, ess_path=args.ess, degradation_path=args.degradation_config,
-        start_soc=args.start_soc,
+        rec_path=args.rec, start_soc=args.start_soc,
         start_energy_mwh=args.start_energy_mwh, from_plan=args.from_plan,
         solar_path=args.solar, wind_path=args.wind, smp_path=args.smp, plants_path=args.plants,
         out_dir=args.out, run_id=args.run_id, overwrite=args.overwrite,
@@ -372,6 +393,7 @@ def main(argv: list[str] | None = None) -> None:
                                      "provisional_next_day", "terminal")}
     head["ess"] = {k: summary["ess"][k] for k in ("degradation_model",
                                                    "throughput_cost_krw_per_mwh", "source")}
+    head["rec"] = summary["rec"]
     print(json.dumps(head, ensure_ascii=False, indent=2, default=_json_default))
     if not validation["all_passed"]:
         print("❌ 제약 검산 실패")

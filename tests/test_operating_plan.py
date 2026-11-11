@@ -129,6 +129,30 @@ def test_degradation_config_overlays_only_cost_fields(tmp_path):
     assert summary["ess"]["throughput_cost_krw_per_mwh"] == v01.throughput_cost_krw_per_mwh
 
 
+def test_rec_config_enters_plan_and_summary(tmp_path):
+    """--rec: 48시간 계획에 REC 가산 열이 붙고 확정 합계에 판매(SMP)·REC·열화비가 나뉜다."""
+    write_forecast_only_inputs(tmp_path, DAYS)
+    p = paths(tmp_path)
+    base = json.loads((op.run_operating_plan(DAYS[1], run_id="b", **p) / "summary.json")
+                      .read_text(encoding="utf-8"))
+    out = op.run_operating_plan(DAYS[1], run_id="r", rec_path="config/rec_v0.yaml", **p)
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    validation = json.loads((out / "validation.json").read_text(encoding="utf-8"))
+    assert validation["all_passed"]
+    assert summary["rec"]["enabled"] and summary["rec"]["status"].startswith("experiment")
+    assert summary["inputs"]["rec_config"]["path"] == "config/rec_v0.yaml"
+    c = summary["committed"]
+    full = pd.read_csv(out / "plan_48h.csv")
+    assert "rec_krw_per_mwh" in full.columns and (full["rec_krw_per_mwh"] > 0).all()
+    assert c["rec_revenue_krw"] == pytest.approx(
+        (full["rec_krw_per_mwh"] * full["sell_mwh"]).iloc[:24].sum())
+    assert c["objective_krw"] == pytest.approx(
+        c["sales_revenue_krw"] + c["rec_revenue_krw"] - c["throughput_cost_krw"])
+    assert base["rec"]["enabled"] is False and base["committed"]["rec_revenue_krw"] == 0
+    assert "rec_krw_per_mwh" not in pd.read_csv(
+        op.run_operating_plan(DAYS[1], run_id="b", overwrite=True, **p) / "plan_48h.csv").columns
+
+
 def test_missing_forecast_day_is_rejected_with_reason(tmp_path):
     write_forecast_only_inputs(tmp_path, DAYS)
     with pytest.raises(ValueError, match="generation_missing"):
