@@ -1,0 +1,17 @@
+# ESS 실행 운전·실현 수익 정산 설정 v0. 실제 시장 규칙을 확인하지 못한 값은 전부 실험 가정이다.
+status: experiment_assumption_not_market_rule
+
+policy:  # vpp.execution.RuleBasedPolicy — 판매계획 고정, 규칙 운전 (수익 최적 보장 없음)
+  extra_discharge: true                       # 부족 시 계획에 없던 추가 방전 허용 (SOC 하한까지)
+  # 잉여 처리 우선순위. 계획에 없던 충전은 팔 수 없는(판매 가치 < 0) 전력에만 한다.
+  # 2024 하반기 실측에서 charge 를 sell 앞에 두면 추가 충전 1,712 MWh 열화비로 실행 수익이 약 2.2억 원 준다.
+  surplus_order: [reduce_discharge, sell, charge, curtail]
+  sell_surplus_only_if_value_nonnegative: true  # 초과 판매는 계획 시점 판매 가치(예측 SMP+REC) ≥ 0 일 때만
+
+settlement:  # vpp.settlement.SettlementParams
+  day_ahead_price: actual_smp        # 하루전 정산 가격 자료 없음 → 그 시각 실측 SMP 로 대체 (실험 가정)
+  deviation_price: actual_smp        # 실시간시장 가격 자료 없음 → 그 시각 실측 SMP 로 대체 (실험 가정)
+  shortfall_price_multiplier: 1.0    # 부족분 환수 배수. 1.0 = 같은 가격으로 되돌림. 근거 자료 없음 (대칭 기본값)
+  surplus_price_multiplier: 1.0      # 초과분 지급 배수. 1.0 = 같은 가격. 근거 자료 없음
+  shortfall_penalty_krw_per_mwh: 0.0 # 부족분 추가 벌칙 단가. 근거 자료 없어 0
+  rec_basis: supplied_mwh_once       # REC 는 실제 공급량에 1회 (계획과 같은 가정, 초기 저장분 제외 미구현)
