@@ -5,7 +5,7 @@ import streamlit as st
 from operator_console import render
 
 st.set_page_config(
-    page_title="JEJU FLOW · 운영 관제",
+    page_title="JEJU FLOW · 운영계획",
     page_icon="🔋",
     layout="wide",
     initial_sidebar_state="collapsed",
