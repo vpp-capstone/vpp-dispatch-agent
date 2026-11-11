@@ -2,11 +2,12 @@
 
     python -m vpp.backtest --raw-dir <원본 폴더> --start 2024-06-01 --end 2025-12-31 \
         --ess config/ess_v0.yaml [--policy rolling48|free|equal_initial] \
-        [--out data/processed/backtest]
+        [--rec config/rec_v0.yaml] [--out data/processed/backtest]
 
 출력: <out>/<실행ID>/hourly_plan.csv, daily_summary.csv, baselines_hourly.csv,
 summary.json, validation.json.
 실측 하루전 SMP·실측 발전량을 그대로 넣는 완전예측 실험이며 실제 입찰 성과가 아니다.
+--rec 를 주면 REC 수익 가정(vpp.rec)이 MILP 와 기준 방식 모두에 판매 단가 가산으로 들어간다.
 """
 
 from __future__ import annotations
@@ -24,14 +25,17 @@ from vpp.baselines import no_ess, plan_revenue_krw, rule_based
 from vpp.evaluation import summarize_backtest
 from vpp.optimization import TERMINAL_POLICIES, EssParams, RollingResult, run_rolling
 from vpp.portfolio_data import build_portfolio_hourly
+from vpp.rec import REC_COLUMN, RecParams, load_rec, rec_metadata
 from vpp.validation import check_plan, check_properties
 
 LIMITATIONS = [
     "완전예측: 실측 하루전 SMP와 실측 발전량을 그대로 입력했다. "
     "실제 입찰·예측 오차 대응 성과가 아니다.",
     "전량 낙찰 가정: 계획한 판매량 전부가 입력 가격에 팔린다고 본다. 낙찰 모형이 아니다.",
-    "REC·실시간 정산(입찰 편차 페널티)·열화 미반영(기본 k=0 원/MWh). "
-    "실제 비용이 0이라는 뜻이 아니다.",
+    "실시간 정산(입찰 편차 페널티)·열화 미반영(기본 k=0 원/MWh). 실제 비용이 0이라는 뜻이 아니다.",
+    "REC 는 --rec 를 줄 때만 가정값(판매 1 MWh 당 1회, 단일 가중치, 시나리오 단가)으로 넣는다. "
+    "실제 발급 기준·계약 형태가 아니다. 초기 저장분이 팔릴 때 붙는 REC 상한은 summary 에 따로 "
+    "적는다.",
     "출력제어 상한 없음: 판매 상한(export cap)을 두지 않았고, "
     "실측 발전량에 이미 포함된 출력제어를 되돌리지 않았다.",
     "가상 단일 포트폴리오: 태양광 18곳 + 풍력 3곳을 네트워크 제약 없이 합산하고 "
@@ -99,18 +103,22 @@ def run_backtest(
     commit_hours: float = 24,
     clip_to_capacity: bool = False,
     market_path: str | Path | None = None,
+    rec_path: str | Path | None = None,
     out_dir: str | Path = "data/processed/backtest",
     run_id: str | None = None,
     overwrite: bool = False,
 ) -> Path:
     """백테스트 전체를 실행하고 결과 폴더 경로를 반환."""
     ess = EssParams.from_yaml(ess_path)
+    rec: RecParams | None = load_rec(rec_path)
     frame, data_checks = build_portfolio_hourly(
         raw_dir, start, end, clip_to_capacity=clip_to_capacity,
         **({} if market_path is None else {"market_path": market_path}),
     )
     if frame.empty:
         raise RuntimeError(f"포함된 날이 없습니다. 제외 사유: {data_checks['excluded_days']}")
+    if rec is not None:
+        frame = rec.apply(frame)  # MILP 와 기준 방식이 같은 가산 열을 본다
     plan = run_rolling(
         frame, ess, horizon_hours=horizon_hours, commit_hours=commit_hours, policy=policy
     )
@@ -122,7 +130,10 @@ def run_backtest(
     out = new_run_dir(out_dir, run_id, overwrite)
     plan.hourly.to_csv(out / "hourly_plan.csv", index=False, encoding="utf-8-sig")
     daily.to_csv(out / "daily_summary.csv", index=False, encoding="utf-8-sig")
-    merged = frame[["ts", "generation_mwh", "price_krw_per_mwh"]].copy()
+    keep = ["ts", "generation_mwh", "price_krw_per_mwh"]
+    if REC_COLUMN in frame.columns:
+        keep.append(REC_COLUMN)
+    merged = frame[keep].copy()
     for name, b in baselines.items():
         for col in ("sell_mwh", "charge_mwh", "discharge_mwh", "curtailment_mwh",
                     "energy_end_mwh"):
@@ -133,12 +144,20 @@ def run_backtest(
         "run_id": run_id, "start": start, "end": end,
         "horizon_hours": plan.horizon_hours, "commit_hours": plan.commit_hours,
         "excluded_days": len(data_checks["excluded_days"]),
+        "rec": rec_metadata(rec),
+        # 시작 저장분(하한 초과분)을 전부 팔았을 때 붙을 수 있는 REC 의 보수적 상한. 순수익 보정용.
+        "initial_energy_rec_upper_bound_krw": (
+            0.0 if rec is None
+            else rec.initial_energy_rec_upper_bound_krw(
+                ess, frame["ts"], initial_energy_mwh=plan.period_initial_energy_mwh)
+        ),
     })
     _write_json(out / "summary.json", summary)
     validation = {
         "run_id": run_id,
         "mode": summary["mode"],
-        "assumptions": {**ess.to_dict(), "source": str(ess_path), "policy": policy},
+        "assumptions": {**ess.to_dict(), "source": str(ess_path), "policy": policy,
+                        "rec": rec_metadata(rec)},
         "limitations": LIMITATIONS,
         "data_checks": data_checks,
         "plan_checks": plan.checks,
@@ -167,6 +186,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="설비용량 초과 시간을 용량으로 클리핑")
     parser.add_argument("--market", default=None,
                         help="가격 대조용 market_hourly.csv (기본: data/processed/market/)")
+    parser.add_argument("--rec", default=None,
+                        help="REC 수익 가정 YAML (예: config/rec_v0.yaml). 없으면 REC 미적용")
     parser.add_argument("--out", default="data/processed/backtest")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--overwrite", action="store_true",
@@ -175,7 +196,7 @@ def main(argv: list[str] | None = None) -> None:
     out = run_backtest(
         args.raw_dir, args.start, args.end, args.ess, policy=args.policy,
         horizon_hours=args.horizon_hours, commit_hours=args.commit_hours,
-        clip_to_capacity=args.clip_to_capacity, market_path=args.market,
+        clip_to_capacity=args.clip_to_capacity, market_path=args.market, rec_path=args.rec,
         out_dir=args.out, run_id=args.run_id, overwrite=args.overwrite,
     )
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))

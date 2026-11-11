@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from vpp.baselines import plan_revenue_krw
+from vpp.baselines import plan_revenue_breakdown
 from vpp.optimization import EssParams, RollingResult
 from vpp.schemas import CostEvaluation, ForecastEvaluation, ForecastResponse, OptimizationResult
 
@@ -34,8 +34,9 @@ def summarize_backtest(
     """MILP 계획(run_rolling 결과)과 기준 계획(baselines.*)들의 수익을 한 표로 요약.
 
     baselines는 {"no_ess": DataFrame, "rule_based": DataFrame, ...} 형태. 각 DataFrame은
-    price_krw_per_mwh·sell_mwh·charge_mwh·discharge_mwh 컬럼을 가진 시간별 계획.
+    price_krw_per_mwh·sell_mwh·charge_mwh·discharge_mwh[·rec_krw_per_mwh] 컬럼을 가진 시간별 계획.
     완전예측 백테스트 결과이며 실제 입찰 성과가 아니다.
+    순수익 = 판매수익(SMP) + REC 수익(REC 미적용이면 0) − 열화비. 기준 방식도 같은 식.
     """
     hourly = plan.hourly
     days = int(pd.to_datetime(hourly["ts"]).dt.date.nunique()) if len(hourly) else 0
@@ -50,8 +51,10 @@ def summarize_backtest(
         "days": days,
         "hours": int(len(hourly)),
         "sales_revenue_krw": plan.sales_revenue_krw,
+        "rec_revenue_krw": plan.rec_revenue_krw,
         "throughput_cost_krw": plan.throughput_cost_krw,
         "net_revenue_krw": net,
+        "terminal_constraint_cost_krw": plan.terminal_constraint_cost_krw,
         "generation_mwh": float(hourly["generation_mwh"].sum()),
         "sold_mwh": float(hourly["sell_mwh"].sum()),
         "charge_mwh": float(hourly["charge_mwh"].sum()),
@@ -64,10 +67,11 @@ def summarize_backtest(
         "baselines": {},
     }
     for name, frame in baselines.items():
-        base_net = plan_revenue_krw(frame, ess)
+        breakdown = plan_revenue_breakdown(frame, ess)
+        base_net = breakdown["net_revenue_krw"]
         delta = net - base_net
         summary["baselines"][name] = {
-            "net_revenue_krw": base_net,
+            **breakdown,
             "sold_mwh": float(frame["sell_mwh"].sum()),
             "curtailment_mwh": float(frame["curtailment_mwh"].sum()),
             "discharge_mwh": float(frame["discharge_mwh"].sum()),

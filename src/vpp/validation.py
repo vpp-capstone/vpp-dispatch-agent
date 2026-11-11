@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from vpp.degradation import build_degradation_model
+from vpp.rec import rec_adder
 
 if TYPE_CHECKING:  # 순환 import 방지 (optimization → validation)
     from vpp.optimization import EssParams
@@ -44,6 +45,7 @@ def check_plan(
     (판매 상한), 동시 충방전 없음, 종료 에너지, 목적함수 재계산 일치, 롤링 에너지 연속.
     initial_energy_mwh가 None이면 ess.initial_energy_mwh(기간 첫 시작)를 쓴다.
     objective_krw가 None이면 계획에서 재계산한 값과 비교할 대상이 없으므로 그 항목은 생략.
+    목적함수 재계산은 (SMP + REC 가산 열) × 판매량 − 열화모델 비용. REC 열이 없으면 가산 0.
     """
     missing = [c for c in PLAN_COLUMNS if c not in plan.columns]
     if missing:
@@ -92,7 +94,8 @@ def check_plan(
         degradation = build_degradation_model(
             ess.degradation_model, ess.throughput_cost_krw_per_mwh, ess.throughput_basis
         )
-        recomputed_obj = float(price @ sell) - degradation.cost_for_arrays(charge, discharge)
+        sell_value = price + rec_adder(plan)
+        recomputed_obj = float(sell_value @ sell) - degradation.cost_for_arrays(charge, discharge)
         v = abs(recomputed_obj - objective_krw)
         checks.append(_item("objective_recomputed_abs_error_krw", v,
                             v <= 1e-3 + 1e-6 * abs(objective_krw)))

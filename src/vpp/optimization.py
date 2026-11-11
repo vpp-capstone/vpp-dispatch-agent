@@ -21,6 +21,7 @@ import yaml
 from scipy.optimize import Bounds, LinearConstraint, milp
 
 from vpp.degradation import build_degradation_model
+from vpp.rec import REC_COLUMN, effective_price_krw_per_mwh, rec_revenue_krw
 from vpp.schemas import OptimizationRequest, OptimizationResult
 from vpp.validation import check_plan
 
@@ -139,15 +140,17 @@ class WindowResult:
     no_ess_same_curtailment_policy_krw: float
     solver_status: str
     mip_gap: float
+    rec_revenue_krw: float = 0.0  # REC 가산 × 판매량 (REC 미적용이면 0). objective 에 포함됨
     checks: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def n(self) -> int:
         return len(self.sell_mwh)
 
-    def to_frame(self, generation_mwh, price_krw_per_mwh, dt_hours) -> pd.DataFrame:
+    def to_frame(self, generation_mwh, price_krw_per_mwh, dt_hours,
+                 rec_krw_per_mwh=None) -> pd.DataFrame:
         """입력과 결과를 validation.check_plan이 받는 시간별 DataFrame으로 합친다."""
-        return pd.DataFrame({
+        out = pd.DataFrame({
             "generation_mwh": np.asarray(generation_mwh, dtype=float),
             "price_krw_per_mwh": np.asarray(price_krw_per_mwh, dtype=float),
             "dt_hours": np.asarray(dt_hours, dtype=float),
@@ -155,6 +158,9 @@ class WindowResult:
             "discharge_mwh": self.discharge_mwh, "curtailment_mwh": self.curtailment_mwh,
             "energy_end_mwh": self.energy_end_mwh, "soc_end": self.soc_end,
         })
+        if rec_krw_per_mwh is not None:
+            out[REC_COLUMN] = np.asarray(rec_krw_per_mwh, dtype=float)
+        return out
 
 
 @dataclass(frozen=True)
@@ -169,10 +175,20 @@ class RollingResult:
     period_initial_energy_mwh: float
     period_final_energy_mwh: float
     checks: list[dict[str, Any]] = field(default_factory=list)
+    # 마지막 창의 종료 제약(E[끝] ≥ 기간 시작 에너지)이 깎은 금액
+    # = 제약 없이 푼 마지막 창 수익 − 제약 있는 수익. 초기 저장분을 팔지 못하게 한 '끝처리 비용'이며
+    # 기간에 한 번만 생긴다. 제약이 없는 정책(free 등)에서는 None.
+    terminal_constraint_cost_krw: float | None = None
 
     @property
     def sales_revenue_krw(self) -> float:
         return float(self.daily["sales_revenue_krw"].sum())
+
+    @property
+    def rec_revenue_krw(self) -> float:
+        if "rec_revenue_krw" not in self.daily.columns:
+            return 0.0
+        return float(self.daily["rec_revenue_krw"].sum())
 
     @property
     def throughput_cost_krw(self) -> float:
@@ -206,6 +222,7 @@ def solve_window(
     export_cap_mwh=None,
     *,
     final_energy_max_mwh: float | None = None,
+    rec_krw_per_mwh=None,
     tol: float = 1e-6,
 ) -> WindowResult:
     """한 창을 MILP로 푼다 (docs/formulation.md §2).
@@ -213,6 +230,9 @@ def solve_window(
     final_energy_min_mwh: 창 마지막 구간 끝 에너지 하한 (기간 끝 잔량 제약 등).
     final_energy_max_mwh: 상한. min과 같게 주면 equal_initial 등식이 된다.
     export_cap_mwh: 구간별 판매 상한(MWh). None이면 제약 없음.
+    rec_krw_per_mwh: 구간별 REC 판매 단가 가산(원/MWh, vpp.rec). None이면 REC 미적용.
+        판매 1 MWh 의 목적함수 계수가 SMP + 가산이 된다. sales_revenue_krw 는 SMP 분만,
+        rec_revenue_krw 는 가산 분이며 objective_krw = sales + rec − 열화비.
     최적해가 아니거나 결과 검산에 실패하면 예외.
     """
     g, price, dt = (
@@ -225,6 +245,12 @@ def solve_window(
     if (g < 0).any() or (dt <= 0).any():
         raise ValueError("발전량은 0 이상, 시간 간격은 양수여야 합니다.")
     n = len(g)
+    rec = None
+    if rec_krw_per_mwh is not None:
+        rec = _as_window_array(rec_krw_per_mwh, n, "rec_krw_per_mwh")
+        if not np.isfinite(rec).all() or (rec < 0).any():
+            raise ValueError("REC 가산은 0 이상 유한해야 합니다.")
+    sell_value = price if rec is None else price + rec  # 판매 1 MWh 의 가치
     start = float(initial_energy_mwh)
     in_range = ess.energy_min_mwh - tol <= start <= ess.energy_max_mwh + tol
     if not math.isfinite(start) or not in_range:
@@ -257,7 +283,8 @@ def solve_window(
     if export_cap is not None:
         upper[q] = export_cap
     objective = np.zeros(6 * n)
-    objective[q], objective[c], objective[d] = -price, charge_wear, discharge_wear  # milp는 최소화
+    # milp 는 최소화. 판매 계수는 SMP(+REC 가산), 충·방전 계수는 열화비.
+    objective[q], objective[c], objective[d] = -sell_value, charge_wear, discharge_wear
     integrality = np.zeros(6 * n, dtype=int)
     integrality[z] = 1
 
@@ -303,11 +330,13 @@ def solve_window(
         sales_revenue_krw=sales,
         throughput_cost_krw=wear_cost,
         objective_krw=float(-result.fun),
-        no_ess_same_curtailment_policy_krw=float(np.maximum(price, 0) @ g),
+        # ESS 없음 기준과 같은 판매/감축 규칙: 판매 가치(SMP+REC) ≥ 0 이면 전량 판매
+        no_ess_same_curtailment_policy_krw=float(np.maximum(sell_value, 0) @ g),
         solver_status="optimal",
         mip_gap=float(result.mip_gap),
+        rec_revenue_krw=0.0 if rec is None else float(rec @ sell),
     )
-    plan = window.to_frame(g, price, dt)
+    plan = window.to_frame(g, price, dt, rec)
     checks = check_plan(
         plan, ess, tol,
         initial_energy_mwh=start, objective_krw=window.objective_krw,
@@ -338,7 +367,10 @@ def _prepare_frame(frame: pd.DataFrame) -> pd.DataFrame:
     else:
         out.insert(0, "ts", pd.RangeIndex(len(out)))
     out = out.reset_index(drop=True)
-    for col in ("generation_mwh", "price_krw_per_mwh", "dt_hours"):
+    numeric = ["generation_mwh", "price_krw_per_mwh", "dt_hours"]
+    if REC_COLUMN in out.columns:  # REC 가산 열은 있을 때만 (vpp.rec.RecParams.apply 가 붙인다)
+        numeric.append(REC_COLUMN)
+    for col in numeric:
         out[col] = out[col].astype(float)
         if not np.isfinite(out[col]).all():
             raise ValueError(f"{col}에 결측/비유한 값이 있습니다 (보간 안 함, 그 날은 제외).")
@@ -412,17 +444,25 @@ class WindowPlan:
         return float(self.hourly["energy_end_mwh"].iloc[-1])
 
     def totals(self, committed_only: bool = True) -> dict[str, float]:
-        """판매수익·열화비·차감 후 계획 수익과 물량 합계. 기본은 확정 구간만."""
+        """판매수익(SMP)·REC 수익·열화비·차감 후 계획 수익과 물량 합계. 기본은 확정 구간만.
+
+        no_ess_same_curtailment_policy_krw 는 같은 시간에 ESS 없이 판매 가치(SMP+REC) ≥ 0 이면
+        전량 판매했을 때의 수익이라, objective 와의 차이가 그 구간의 'ESS 없음 대비 추가수익'이다.
+        """
         part = self.committed if committed_only else self.hourly
         price = part["price_krw_per_mwh"].to_numpy()
         gen = part["generation_mwh"].to_numpy()
         sales = float(price @ part["sell_mwh"].to_numpy())
+        rec = rec_revenue_krw(part)
         wear = self._ess.degradation_cost_krw(part["charge_mwh"], part["discharge_mwh"])
         return {
             "sales_revenue_krw": sales,
+            "rec_revenue_krw": rec,
             "throughput_cost_krw": wear,
-            "objective_krw": sales - wear,
-            "no_ess_same_curtailment_policy_krw": float(np.maximum(price, 0) @ gen),
+            "objective_krw": sales + rec - wear,
+            "no_ess_same_curtailment_policy_krw": float(
+                np.maximum(effective_price_krw_per_mwh(part), 0) @ gen
+            ),
             "generation_mwh": float(gen.sum()),
             "sell_mwh": float(part["sell_mwh"].sum()),
             "charge_mwh": float(part["charge_mwh"].sum()),
@@ -457,11 +497,13 @@ def plan_window(
     export_cap_col: str | None = None,
     tol: float = 1e-6,
 ) -> WindowPlan:
-    """한 창(ts, generation_mwh, price_krw_per_mwh[, dt_hours])을 풀고 앞 commit_hours 를 확정한다.
+    """한 창(ts, generation_mwh, price_krw_per_mwh[, dt_hours][, rec_krw_per_mwh])을 풀고 앞
+    commit_hours 를 확정한다.
 
     창 길이는 frame 이 정한다 (운영계획 48행, 백테스트 마지막 날 24행 등). 나머지 행은 잠정
     (provisional) 계획으로 hourly 에 남지만 totals/summary_row 의 기본 집계에는 들어가지 않는다.
-    열화비는 ess.degradation() 의 비용 함수로만 계산한다.
+    열화비는 ess.degradation() 의 비용 함수로만 계산한다. frame 에 rec_krw_per_mwh 열이 있으면
+    (vpp.rec) 판매 단가 가산으로 목적함수에 들어가고 집계에 rec_revenue_krw 가 나뉘어 나온다.
     """
     data = _prepare_frame(frame)
     if export_cap_col is not None and export_cap_col not in data.columns:
@@ -472,6 +514,7 @@ def plan_window(
     if n_commit == 0:
         raise ValueError("확정할 구간이 없습니다 (commit_hours 가 첫 구간보다 짧음).")
     export_cap = None if export_cap_col is None else data[export_cap_col].to_numpy()
+    rec = data[REC_COLUMN].to_numpy() if REC_COLUMN in data.columns else None
     solved = solve_window(
         data["generation_mwh"].to_numpy(),
         data["price_krw_per_mwh"].to_numpy(),
@@ -481,6 +524,7 @@ def plan_window(
         final_energy_min_mwh=terminal.final_energy_min_mwh,
         export_cap_mwh=export_cap,
         final_energy_max_mwh=terminal.final_energy_max_mwh,
+        rec_krw_per_mwh=rec,
         tol=tol,
     )
     hourly = data.copy()
@@ -539,6 +583,7 @@ def run_rolling(
     offset = 0.0
     window_id = 0
     eps = 1e-9
+    terminal_cost: float | None = None
     while offset < total_hours - eps:
         in_window = (elapsed >= offset - eps) & (elapsed < offset + horizon_hours - eps)
         idx = np.flatnonzero(in_window)
@@ -553,6 +598,11 @@ def run_rolling(
             data.iloc[idx], ess, start, commit_hours=commit_hours, terminal=terminal,
             export_cap_col=export_cap_col, tol=tol,
         )
+        if policy == "rolling48" and is_last:
+            terminal_cost = terminal_constraint_cost_krw(
+                data.iloc[idx], ess, start, plan, commit_hours=commit_hours,
+                export_cap_col=export_cap_col, tol=tol,
+            )
         committed = plan.committed.drop(columns="committed")
         committed["window_id"] = window_id
         hourly_parts.append(committed)
@@ -587,7 +637,35 @@ def run_rolling(
         period_initial_energy_mwh=period_start_energy,
         period_final_energy_mwh=start,
         checks=checks,
+        terminal_constraint_cost_krw=terminal_cost,
     )
+
+
+def terminal_constraint_cost_krw(
+    frame: pd.DataFrame,
+    ess: EssParams,
+    initial_energy_mwh: float,
+    constrained: WindowPlan,
+    *,
+    commit_hours: float,
+    export_cap_col: str | None = None,
+    tol: float = 1e-6,
+) -> float:
+    """마지막 창의 종료 제약을 풀었을 때 늘어나는 계산상 수익.
+
+    같은 창을 제약 없이 한 번 더 풀어 뺀다. 충·방전이 전혀 없어도 남겨 둔 잔량을 팔 기회를 막으면
+    양수가 된다 (기회비용 포함). 실제 충전 비용이 아니고, 순수익에 더해 사이클 수익으로 해석하면
+    안 된다. 결과 집계·보고에만 쓰고 계획에는 영향을 주지 않는다. 0 이상이어야 한다 (제약을 풀면
+    수익이 줄 수 없으므로). 수치 오차 범위를 넘는 음수면 예외.
+    """
+    free = plan_window(
+        frame, ess, initial_energy_mwh, commit_hours=commit_hours, terminal=Terminal(),
+        export_cap_col=export_cap_col, tol=tol,
+    )
+    cost = free.totals()["objective_krw"] - constrained.totals()["objective_krw"]
+    if cost < -(1e-3 + 1e-6 * abs(free.totals()["objective_krw"])):
+        raise RuntimeError(f"종료 제약을 풀었는데 수익이 줄었습니다: {cost}")
+    return max(0.0, float(cost))
 
 
 def plan_ess(request: OptimizationRequest) -> OptimizationResult:

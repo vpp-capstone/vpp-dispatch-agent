@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from settings import OPERATING_PLAN_DIR, Settings, settings_chips
+from settings import OPERATING_PLAN_DIR, Settings, rec_diff, settings_chips
 from ui import COLORS, MAN, checks_table, kpi, run_stamp, timeline_figure, unit
 from vpp.operating_plan import MODE as PLAN_MODE
 from vpp.operating_plan import run_operating_plan
@@ -26,9 +26,18 @@ START_LABEL = {"config_soc_initial": "시작: ESS 설정값", "user_input": "시
 
 
 def list_plan_runs(base: Path = OPERATING_PLAN_DIR) -> list[Path]:
+    """운영계획 결과 폴더만 (summary.mode 로 거른다. 다른 결과가 같은 폴더에 있어도 섞이지 않게)."""
     if not base.exists():
         return []
-    runs = [p for p in base.iterdir() if (p / "summary.json").exists()]
+    runs = []
+    for p in base.iterdir():
+        if not (p / "summary.json").exists():
+            continue
+        try:
+            if _summary(p).get("mode") == PLAN_MODE:
+                runs.append(p)
+        except (OSError, ValueError):
+            continue
     return sorted(runs, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
@@ -76,6 +85,7 @@ def applied_vs_current(summary: dict[str, Any], settings: Settings) -> list[str]
                 "degradation_model", "throughput_basis", "throughput_cost_krw_per_mwh"):
         if summary["ess"].get(key) != cur[key]:
             diffs.append(f"{key} {summary['ess'].get(key)} → {cur[key]}")
+    diffs += rec_diff(summary, settings)
     for name, path in settings.files.items():
         used = summary["inputs"].get({"solar": "solar_predictions", "wind": "wind_predictions",
                                       "smp": "smp_forecast", "plants": "plants"}[name], {})
@@ -85,6 +95,16 @@ def applied_vs_current(summary: dict[str, Any], settings: Settings) -> list[str]
             diffs.append(f"{name} 파일 내용 변경됨 (크기 {used.get('size_bytes')} → "
                          f"{path.stat().st_size})")
     return diffs
+
+
+def revenue_caption(totals: dict[str, Any], scale: float = MAN, digits: int = 1) -> str:
+    """'판매 X + REC Y − 열화비 Z' (REC 가 0 이면 REC 항은 생략). 단위 만 원."""
+    parts = [f"판매(SMP) {totals['sales_revenue_krw'] / scale:,.{digits}f}"]
+    rec = totals.get("rec_revenue_krw", 0.0) or 0.0
+    if rec:
+        parts.append(f"+ REC {rec / scale:,.{digits}f}")
+    parts.append(f"− 열화비 {totals['throughput_cost_krw'] / scale:,.{digits}f}")
+    return " ".join(parts)
 
 
 def plan48_figure(plan: pd.DataFrame, ess: EssParams) -> go.Figure:
@@ -171,7 +191,7 @@ def render(settings: Settings, bundle: dict[str, Any] | None) -> None:
             try:
                 out = run_operating_plan(
                     day, ess_path=settings.ess_path, degradation_path=settings.degradation_path,
-                    start_soc=start_soc, from_plan=from_plan,
+                    rec_path=settings.rec_path, start_soc=start_soc, from_plan=from_plan,
                     solar_path=settings.solar, wind_path=settings.wind, smp_path=settings.smp,
                     plants_path=settings.plants, out_dir=OPERATING_PLAN_DIR, run_id=run_id,
                 )
@@ -205,8 +225,7 @@ def render(settings: Settings, bundle: dict[str, Any] | None) -> None:
     man = unit("만 원")
     cards = [
         kpi("확정 24시간 계획 수익", f"{c['objective_krw'] / MAN:,.1f}{man}",
-            f"판매 {c['sales_revenue_krw'] / MAN:,.1f} − 열화비 "
-            f"{c['throughput_cost_krw'] / MAN:,.1f}", "flat", "💰"),
+            revenue_caption(c), "flat", "💰"),
         kpi("ESS 방전 / 충전 (확정)",
             f"{c['discharge_mwh']:.2f} / {c['charge_mwh']:.2f}{unit(' MWh')}",
             f"감축 {c['curtailment_mwh']:.2f} MWh", "flat", "🔋", "#F5F3FF"),
@@ -222,12 +241,25 @@ def render(settings: Settings, bundle: dict[str, Any] | None) -> None:
         gap = se.get("carry_gap_mwh", 0.0)
         st.info(f"이월 확인 · 이전 계획 종료 {se['previous_final_energy_mwh']:.3f} MWh → 오늘 시작 "
                 f"{se['energy_mwh']:.3f} MWh (차이 {gap:+.3f}). {se['note']}")
+    rec_applied = (s.get("rec") or {}).get("enabled", False)
+    gain = c["objective_krw"] - c["no_ess_same_curtailment_policy_krw"]
+    st.markdown(
+        f'<div class="note">ESS 없음 대비 추가수익(확정 24시간): <b>{gain / MAN:+,.1f}만 원</b> — '
+        f'같은 시간에 ESS 없이 판매 가치(SMP{" + REC" if rec_applied else ""}) ≥ 0 이면 전량 '
+        f'판매했을 때 {c["no_ess_same_curtailment_policy_krw"] / MAN:,.1f}만 원과의 차이. '
+        + ("REC 는 ESS 없이 팔아도 받으므로 전체 REC 수익이 곧 ESS 추가수익은 아니다."
+           if rec_applied else "REC 미적용.")
+        + '</div>', unsafe_allow_html=True)
     ok = v.get("all_passed", False)
     (st.success if ok else st.error)(
         f"제약 검산 {'통과' if ok else '실패'} · 48시간 계산 {s['window']['solved_hours']}h · "
         f"확정 {s['window']['commit_hours']}h · 종료 정책 {s['terminal']} · "
         f"열화 {s['ess']['degradation']['name']} "
-        f"{s['ess']['throughput_cost_krw_per_mwh']:,.0f}원/MWh"
+        f"{s['ess']['throughput_cost_krw_per_mwh']:,.0f}원/MWh · "
+        + (f"REC {s['rec'].get('weight')}× "
+           f"{s['rec']['pricing'].get('price_krw_per_rec', '월별표'):,}원/REC (가정)"
+           if rec_applied and s["rec"]["pricing"]["type"] == "flat_scenario"
+           else ("REC 월별표 (가정)" if rec_applied else "REC 미적용"))
     )
 
     g1, g2 = st.columns([1.5, 1])
@@ -252,8 +284,9 @@ def render(settings: Settings, bundle: dict[str, Any] | None) -> None:
         st.dataframe(checks_table(v.get("structure_checks", []) + v.get("plan_checks_48h", [])),
                      width="stretch", hide_index=True, height=420)
     with st.expander("실행 기록 · 입력 파일 식별 · 코드 버전"):
-        st.json({k: s[k] for k in ("run_id", "created_at", "code_version", "start_energy",
-                                   "forecast_sources", "inputs", "ess", "terminal")})
+        st.json({k: s.get(k) for k in ("run_id", "created_at", "code_version", "start_energy",
+                                       "forecast_sources", "inputs", "ess", "rec",
+                                       "initial_energy_rec_upper_bound_krw", "terminal")})
         st.markdown("#### 한계")
         for line in s.get("limitations", []):
             st.markdown(f"- {line}")
