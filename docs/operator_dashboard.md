@@ -41,6 +41,18 @@ python -m vpp.operator_pipeline
 묶음은 그 묶음의 단계만 "파일 대기"가 되고, 다른 묶음과 그 묶음의 이전 결과는 그대로 남는다. 팀원이 두
 파일을 다 가지고 있으면 2025 예측 계획과 2024 실측 기반 실행 결과를 같은 화면에서 번갈아 볼 수 있다.
 
+발전량 담당의 기본 구성은 세 묶음이다.
+
+- `2025 최종 평가`: 동결된 운영 예측값에 2025 실측만 결합한다. 모델을 다시 선택하거나 튜닝하지 않는다.
+- `2025 운영 입력`: 실측 열이 없는 원래 운영용 예측으로, 계획 생성만 검증한다.
+- `2024 개선 검증`: 선택된 개선 구조를 2023년 라벨만으로 다시 학습해 2024년을 예측한다. 개발
+  검증 자료이므로 독립 최종 테스트로 해석하지 않는다.
+
+`python -m vpp.generation_forecast.export_evaluation_predictions`가 2024 검증 파일은
+`artifacts/2024_validation/`, 2025 평가 파일은 `artifacts/2025/evaluation/`에 만들고 SHA-256
+요약은 `artifacts/generation_evaluation_export_summary.json`에 기록한다. 실측 없는 2025 운영
+파일은 `artifacts/2025/operational/`에 둔다. parquet은 Git에 넣지 않고 Drive로 공유한다.
+
 ## 화면과 결과의 의미
 
 - 요약: 오늘 판매계획, 어제 실적(실행 수익 또는 실측 대기), 이번 달 누적 예상 수익, ESS 효과.
