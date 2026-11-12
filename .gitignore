@@ -27,6 +27,7 @@ data/processed/*
 models/
 artifacts/models/
 artifacts/predictions/
+artifacts/generation_evaluation_export_summary.json
 *.joblib
 
 # Secrets

@@ -10,17 +10,21 @@ plants: data/reference/plant_location_master_21.csv
 # 데이터 묶음: 묶음마다 MILP·실행 결과를 따로 계산해 두고 화면 사이드바에서 골라 본다.
 # 첫 묶음이 기본. 파일이 없는 묶음은 그 묶음만 '파일 대기'가 되고 나머지는 그대로 보인다.
 datasets:
-  - name: 2025 예측 (improved)
-    solar: artifacts/predictions/solar_improved_predictions.parquet
-    wind: artifacts/predictions/wind_improved_predictions.parquet
+  - name: 2025 최종 평가 (improved, 실측 포함)
+    solar: artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet
+    wind: artifacts/2025/evaluation/wind_improved_2025_with_actual.parquet
     smp: data/processed/forecast/smp_forecast.csv
-  - name: 2024 검증 (실측 포함)
-    solar: artifacts/predictions/solar_validation_predictions.parquet
-    wind: artifacts/predictions/wind_validation_predictions.parquet
+  - name: 2025 운영 입력 (실측 제외)
+    solar: artifacts/2025/operational/solar_improved_predictions.parquet
+    wind: artifacts/2025/operational/wind_improved_predictions.parquet
+    smp: data/processed/forecast/smp_forecast.csv
+  - name: 2024 개선 검증 (실측 포함)
+    solar: artifacts/2024_validation/solar_improved_2024_validation_with_actual.parquet
+    wind: artifacts/2024_validation/wind_improved_2024_validation_with_actual.parquet
     smp: data/processed/forecast/smp_forecast.csv
 # 아래 상위 경로는 datasets 가 없을 때의 묶음 하나 (호환용)
-solar: artifacts/predictions/solar_improved_predictions.parquet
-wind: artifacts/predictions/wind_improved_predictions.parquet
+solar: artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet
+wind: artifacts/2025/evaluation/wind_improved_2025_with_actual.parquet
 # SMP 담당 공유 csv
 smp: data/processed/forecast/smp_forecast.csv
 output: data/processed/operator_pipeline

@@ -60,12 +60,17 @@ Git에 들어 있는 데이터는 `data/reference/`와 `data/sample/`뿐이다. 
 
 **2. 예측 결과 (ESS에 예측을 연결할 때)**
 
-| 받는 곳     | 파일                                                                          | 넣는 위치                             |
-| ----------- | ----------------------------------------------------------------------------- | ------------------------------------- |
-| 발전량 담당 | `*_validation_predictions.parquet`, `*_test_predictions.parquet`, `*_ensemble_*_predictions.parquet` | `artifacts/predictions/`              |
-| 발전량 담당 | `*_lightgbm.joblib`, `*_ensemble.joblib`                                                         | `artifacts/models/`                   |
-| 발전량 담당 | `generation_model_metrics.csv`, `generation_ensemble_metrics.csv` 등 지표·요약                    | `data/processed/generation_forecast/` |
-| SMP 담당    | `smp_forecast.csv` (`smp_metrics.csv`)                                        | `data/processed/forecast/`            |
+| 받는 곳     | 파일 | 넣는 위치 |
+| ----------- | ---- | --------- |
+| 발전량 담당 | 2024 검증용 실측 포함 파일 `solar_improved_2024_validation_with_actual.parquet`, `wind_improved_2024_validation_with_actual.parquet` | `artifacts/2024_validation/` |
+| 발전량 담당 | 2025 운영용 예측 파일 `solar_improved_predictions.parquet`, `wind_improved_predictions.parquet` | `artifacts/2025/operational/` |
+| 발전량 담당 | 2025 평가용 실측 포함 파일 `solar_improved_2025_with_actual.parquet`, `wind_improved_2025_with_actual.parquet` | `artifacts/2025/evaluation/` |
+| 발전량 담당 | `*_lightgbm.joblib`, `*_ensemble.joblib` 등 학습 모델 | `artifacts/models/` |
+| 발전량 담당 | `generation_model_metrics.csv`, `generation_ensemble_metrics.csv` 등 지표·요약 | `data/processed/generation_forecast/` |
+| SMP 담당    | `smp_forecast.csv` (`smp_metrics.csv`) | `data/processed/forecast/` |
+
+발전량 예측 산출물과 모델은 Git에서 제외되므로 Drive로 공유한다. 2025 `operational/` 파일은 실측값 없이 운영계획 입력에 사용하고,
+`evaluation/` 파일은 동일한 고정 예측값에 실측 발전량을 붙여 사후 평가에만 사용한다.
 
 **3. 해당 모듈을 직접 돌릴 때만**
 
@@ -93,8 +98,13 @@ python -m pip install -e ".[dev]"
 python -m streamlit run dashboard/app.py       # 화면 http://localhost:8501 (샘플 그래프)
 python -m uvicorn api.main:app --reload        # API 문서 http://localhost:8000/docs
 python -m vpp.pipeline --date 2026-01-03       # CLI (모듈 연결 후 동작)
+python -m vpp.generation_forecast.export_evaluation_predictions  # 2024·2025 평가 파일 생성
 pytest                                       # PR 전에 한 번
 ```
+
+평가 파일 생성 명령은 2024년 예측을 만들 때 2023년 라벨만 사용해 선택된 모델 구조를 다시 학습하므로 검증 연도 누수를 막는다.
+2025년 평가 파일은 기존 운영용 예측값을 다시 계산하지 않고 그대로 유지한 채 실측 열만 결합하며,
+`artifacts/generation_evaluation_export_summary.json`에 행 수·기간·평가지표·SHA-256을 기록한다.
 
 ESS 계산 CLI 3개(`vpp.operating_plan` 운영계획, `vpp.forecast_backtest` 예측 vs 완전예측 비교,
 `vpp.backtest` 실측 백테스트)는 공통 옵션 `--ess config/ess_v0.yaml`,
@@ -137,6 +147,8 @@ src/vpp/
     tune_wind_improvements.py 풍력 궤적·격자 피처 비교
     tune_oof_ensemble.py     2023 OOF 가중치 학습·2024 평가
     improved_model.py        최종 OOF 앙상블 재학습·추론
+    infer_improved.py        최종 모델 번들의 2025 운영용 예측 생성
+    export_evaluation_predictions.py  누수 없는 2024 검증·고정된 2025 평가 파일 생성
     ensemble.py              Weighted Ensemble·Stacking 학습 및 평가
   smp_weather_features.py    GFS 6격자 → SMP 전달용 제주 기상 피처 집계
   market/                    수요·SMP·출력제어 원본 수집 및 통합
@@ -168,7 +180,17 @@ data/
 
 artifacts/
   models/                    학습 모델 파일, Git 제외
-  predictions/               검증·테스트 예측 결과, Git 제외
+  2024_validation/           2023 라벨로 학습한 2024 검증 예측+실측, Git 제외
+    solar_improved_2024_validation_with_actual.parquet
+    wind_improved_2024_validation_with_actual.parquet
+  2025/
+    operational/             운영계획용 2025 예측(실측 없음), Git 제외
+      solar_improved_predictions.parquet
+      wind_improved_predictions.parquet
+    evaluation/              고정된 2025 예측+실측 평가 파일, Git 제외
+      solar_improved_2025_with_actual.parquet
+      wind_improved_2025_with_actual.parquet
+  generation_evaluation_export_summary.json  평가 산출물 무결성·지표 요약, Git 제외
 
 config/
   ess_v0.yaml                ESS 기본 사양·비용 설정
