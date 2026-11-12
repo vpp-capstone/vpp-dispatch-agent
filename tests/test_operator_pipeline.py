@@ -178,6 +178,47 @@ def test_run_uses_shared_files_and_blocks_when_one_is_missing(tmp_path, monkeypa
     assert [r["name"] for r in op.requirements(cfg) if not r["ready"]] == ["SMP 예측"]
 
 
+def test_two_datasets_get_separate_releases_and_only_missing_one_blocks(tmp_path, monkeypatch):
+    """묶음 둘(예: 2025 예측·2024 실측)을 따로 계산하고, 파일이 없는 묶음만 막힌다."""
+    import shutil
+
+    write_inputs(tmp_path, DAYS)
+    for k in ("solar", "wind"):
+        shutil.copyfile(tmp_path / f"{k}.parquet", tmp_path / f"{k}_b.parquet")
+    cfg = {
+        "output": str(tmp_path / "output"),
+        "plants": str(tmp_path / "plants.csv"),
+        "ess": str(tmp_path / "ess.yaml"),
+        "rec": None,
+        "datasets": [
+            {"name": "A", "solar": str(tmp_path / "solar.parquet"),
+             "wind": str(tmp_path / "wind.parquet"), "smp": str(tmp_path / "smp.csv")},
+            {"name": "B", "solar": str(tmp_path / "solar_b.parquet"),
+             "wind": str(tmp_path / "wind_b.parquet"), "smp": str(tmp_path / "smp.csv")},
+        ],
+    }
+    cfg.update({k: cfg["datasets"][0][k] for k in ("solar", "wind", "smp")})
+    monkeypatch.setattr(op, "config", lambda root: cfg)
+    result = op.run(tmp_path)
+    assert result["state"] == "complete"
+    assert [s["name"] for s in result["stages"]] == [
+        "MILP 재계산·검산 · A", "MILP 재계산·검산 · B",
+    ]
+    assert set(result["releases"]) == {"A", "B"}
+    assert result["active"]["label"] == "A"
+    assert result["releases"]["B"]["label"] == "B"
+    names = [r["name"] for r in op.requirements(cfg)]
+    assert "태양광 예측 · B" in names and "ESS 설정" in names
+
+    (tmp_path / "solar_b.parquet").unlink()
+    blocked = op.run(tmp_path)
+    assert blocked["state"] == "needs_data"
+    assert [s["state"] for s in blocked["stages"]] == ["complete", "blocked"]
+    assert blocked["stages"][1]["missing"] == [str(tmp_path / "solar_b.parquet")]
+    assert set(blocked["releases"]) == {"A", "B"}  # 이전 B 결과는 유지
+    assert blocked["active"]["id"] == result["active"]["id"]
+
+
 def test_monthly_rec_change_with_same_extremes_invalidates_result(tmp_path):
     write_inputs(tmp_path, DAYS)
     table = tmp_path / "monthly.csv"

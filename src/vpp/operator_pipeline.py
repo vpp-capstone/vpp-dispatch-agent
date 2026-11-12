@@ -1,9 +1,9 @@
-"""담당: 대시보드 통합 — 팀 Drive 에서 받은 예측 결과 파일 → MILP → 화면.
+"""대시보드 통합 — 팀 Drive 에서 받은 예측 결과 파일 → MILP → 화면.
 
 팀원이 모델을 바꾸면 결과 파일(발전량 parquet, SMP csv)을 Drive 로 공유하고 각자 같은 경로에 둔다.
 이 모듈은 그 파일과 ESS·REC 설정, 최적화 코드의 **내용**이 바뀌었을 때만 비교 백테스트와 48시간
 운영계획을 다시 풀고, 검산을 통과한 결과를 화면의 공통 결과로 올린다. 모델 학습·추론은 하지 않는다
-(담당자가 돌려 공유한다). Git 커밋·푸시, 다운로드도 하지 않는다.
+(담당자가 돌려 공유한다).
 
     python -m vpp.operator_pipeline      # 한 번 실행. 대시보드가 열려 있으면 30초마다 변경 확인
 """
@@ -88,14 +88,40 @@ def atomic_json(path: Path, value) -> None:
     tmp.replace(path)
 
 
+DATASET_KEYS = ("solar", "wind", "smp")
+DEFAULT_DATASET = "Drive 공유 예측 파일"
+
+
 def config(root: Path = ROOT) -> dict:
+    """설정 읽기. datasets 가 있으면 묶음마다 solar/wind/smp 경로를 절대경로로 만들고, 상위
+    solar/wind/smp 는 첫 묶음으로 채운다 (기존 호출자 호환). 없으면 상위 경로가 묶음 하나다."""
     cfg = yaml.safe_load(
         (root / "config/operator_pipeline.yaml").read_text(encoding="utf-8")
     )
-    for name in (*INPUT_KEYS, "output"):
+    raw = {k: cfg.get(k) for k in DATASET_KEYS}
+    items = cfg.get("datasets") or [{"name": DEFAULT_DATASET, **raw}]
+    names = [str(item.get("name") or "") for item in items]
+    if len(set(names)) != len(names) or "" in names:
+        raise ValueError("datasets 의 name 은 비어 있지 않고 서로 달라야 합니다.")
+    for item in items:
+        for k in DATASET_KEYS:
+            value = item.get(k) or raw.get(k)
+            if not value:
+                raise ValueError(f"데이터 묶음 {item.get('name')!r} 에 {k} 경로가 없습니다.")
+            item[k] = str((root / value).resolve())
+    cfg["datasets"] = items
+    for k in DATASET_KEYS:
+        cfg[k] = items[0][k]
+    for name in ("plants", "ess", "rec", "output"):
         if cfg.get(name):
             cfg[name] = str((root / cfg[name]).resolve())
     return cfg
+
+
+def datasets(cfg: dict) -> list[dict]:
+    """설정의 데이터 묶음 목록 (config() 를 거치지 않은 dict 도 상위 경로 한 묶음으로 본다)."""
+    return cfg.get("datasets") or [{"name": DEFAULT_DATASET,
+                                    **{k: cfg.get(k) for k in DATASET_KEYS}}]
 
 
 def digest(path: Path) -> str:
@@ -121,14 +147,22 @@ def _rec_table(root: Path, rec_path: str | None) -> Path | None:
 
 def revision(root: Path, cfg: dict) -> str:
     """공유 파일·설정·최적화 코드의 내용 지문. 파일명이 같아도 내용이 바뀌면 달라진다."""
-    h = hashlib.sha256(json.dumps({k: cfg.get(k) for k in INPUT_KEYS}, sort_keys=True).encode())
+    items = datasets(cfg)
+    identity = {k: cfg.get(k) for k in ("plants", "ess", "rec")}
+    identity["datasets"] = [{k: item.get(k) for k in ("name", *DATASET_KEYS)} for item in items]
+    h = hashlib.sha256(json.dumps(identity, sort_keys=True).encode())
     for name in ENGINE_FILES:
         path = root / "src/vpp" / name
         h.update(name.encode())
         h.update(path.read_bytes() if path.exists() else b"missing")
-    for key in INPUT_KEYS:
+    for key in ("plants", "ess", "rec"):
         path = Path(cfg[key]) if cfg.get(key) else None
         h.update((digest(path) if path and path.exists() else f"missing:{key}").encode())
+    for item in items:
+        for key in DATASET_KEYS:
+            path = Path(item[key]) if item.get(key) else None
+            h.update((digest(path) if path and path.exists()
+                      else f"missing:{item['name']}:{key}").encode())
     table = _rec_table(root, cfg.get("rec"))
     if table is not None:
         h.update((digest(table) if table.exists() else f"missing:{table}").encode())
@@ -140,17 +174,26 @@ def status(root: Path = ROOT) -> dict:
 
 
 def requirements(cfg: dict) -> list[dict]:
-    """화면에 보여 줄 '같은 경로에 있어야 하는 공유 파일' 목록."""
-    rows = (
+    """화면에 보여 줄 '같은 경로에 있어야 하는 공유 파일' 목록 (데이터 묶음마다 예측 파일 3개)."""
+    per_dataset = (
         ("태양광 예측", "solar", "발전량 담당이 Drive 로 공유한 parquet"),
         ("풍력 예측", "wind", "발전량 담당이 Drive 로 공유한 parquet"),
         ("SMP 예측", "smp", "SMP 담당이 Drive 로 공유한 csv"),
+    )
+    shared = (
         ("발전소 기준정보", "plants", "Git 포함"),
         ("ESS 설정", "ess", "config/"),
         ("REC 설정", "rec", "config/ (비우면 REC 미적용)"),
     )
+    items = datasets(cfg)
     out = []
-    for name, key, purpose in rows:
+    for item in items:
+        suffix = "" if len(items) == 1 else f" · {item['name']}"
+        for name, key, purpose in per_dataset:
+            path = item.get(key)
+            out.append({"name": name + suffix, "ready": bool(path) and Path(path).is_file(),
+                        "path": path or "(미지정)", "purpose": purpose})
+    for name, key, purpose in shared:
         path = cfg.get(key)
         ready = Path(path).is_file() if path else key == "rec"
         out.append({"name": name, "ready": ready, "path": path or "(미지정)", "purpose": purpose})
@@ -220,10 +263,8 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         ess_path=copies["ess"],
         rec_path=cfg.get("rec"),
     )
-    comparable = [w for w in windows if w.comparable]
-    backtest = None
     start_energy = None
-    if comparable:
+    if True:  # 실측이 없어도 예측 계획(롤링)은 만든다. 비교 시나리오는 실측이 있을 때만 붙는다.
         backtest = run_forecast_backtest(
             windows[0].planning_day,
             windows[-1].planning_day,
@@ -251,6 +292,17 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
                 - ess.charge_efficiency * row.charge_mwh
                 + row.discharge_mwh / ess.discharge_efficiency
             )
+        # 실행 운전 결과가 있으면 계획일의 실행 사슬 시작 잔량(= 전날 **실행** 종료 잔량)이 오늘
+        # 시작값이다. 구간이 끊긴 날은 실행 사슬도 설정값에서 다시 시작하므로 config 로 표시한다.
+        start_soc_source = "planned" if start_energy is not None else "config"
+        daily_exec = backtest / "daily_execution.csv"
+        if daily_exec.exists():
+            daily = pd.read_csv(daily_exec)
+            row = daily[(daily.scenario == "executed")
+                        & (pd.to_datetime(daily.planning_day).dt.date == last_day)]
+            if len(row):
+                start_energy = float(row.iloc[0].exec_start_energy_mwh)
+                start_soc_source = "config" if bool(row.iloc[0].segment_start) else "executed"
     plan = run_operating_plan(
         windows[-1].planning_day,
         **common,
@@ -281,14 +333,18 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         "backtest": str(backtest) if backtest else None,
         "plan": str(plan),
         "realized_profit": None,
+        # 실측이 없는 기간은 예측 계획만 만든다 (비교 시나리오 없음). 화면이 이 값으로 분기한다.
+        "actual_available": bool(read_json(backtest / "summary.json").get("actual_available"))
+        if backtest else False,
         "generation_availability_verified": False,
         "start_soc_note": "ESS 설정 시작 잔량",
+        "start_soc_source": start_soc_source,
     }
-    result["start_soc_note"] = (
-        "비교 계획의 시작 잔량 (실제 실행 SOC 아님)"
-        if start_energy is not None
-        else "ESS 설정 시작 잔량 (이전 실행 SOC 없음)"
-    )
+    result["start_soc_note"] = {
+        "executed": "전날 실행 운전의 종료 잔량 (확정 계획을 실측에 적용한 결과)",
+        "planned": "비교 계획의 시작 잔량 (실제 실행 SOC 아님)",
+        "config": "ESS 설정 시작 잔량 (이전 실행 SOC 없음)",
+    }[start_soc_source]
     result["output_hashes"] = {
         str(p): digest(p)
         for folder in (plan, backtest)
@@ -328,24 +384,33 @@ def run(root: Path = ROOT) -> dict:
 
         save()
 
+        # 묶음별 결과는 따로 보관한다. 파일이 없는 묶음만 막히고 다른 묶음·이전 결과는 유지된다.
+        items = datasets(cfg)
+        names = {item["name"] for item in items}
+        releases = {k: v for k, v in (old.get("releases") or {}).items() if k in names}
+        if not releases and old.get("active") and old["active"].get("label") in names:
+            releases[old["active"]["label"]] = old["active"]
+        state["releases"] = releases
         try:
-            sources = {k: Path(cfg[k]) for k in ("solar", "wind", "smp")}
-            label = "Drive 공유 예측 파일"
-            if all(p.exists() for p in sources.values()):
-                state["stages"].append({"name": "MILP 재계산·검산", "state": "running"})
-                save()
-                release = refresh_dispatch(root, cfg, sources, label=label)
-                state["stages"][-1]["state"] = "complete"
-                state["active"] = release
-            else:
-                state["stages"].append(
-                    {
-                        "name": "MILP 재계산·검산",
-                        "state": "blocked",
+            for item in items:
+                name = item["name"]
+                stage = "MILP 재계산·검산" if len(items) == 1 else f"MILP 재계산·검산 · {name}"
+                sources = {k: Path(item[k]) for k in DATASET_KEYS}
+                if all(p.exists() for p in sources.values()):
+                    state["stages"].append({"name": stage, "state": "running", "dataset": name})
+                    save()
+                    release = refresh_dispatch(root, cfg, sources, label=name)
+                    # 내용이 같은 묶음은 같은 결과를 재사용한다. 화면 표시용 이름만 이 묶음으로.
+                    releases[name] = {**release, "label": name}
+                    state["stages"][-1]["state"] = "complete"
+                else:
+                    state["stages"].append({
+                        "name": stage, "state": "blocked", "dataset": name,
                         "missing": [str(p) for p in sources.values() if not p.exists()],
-                    }
-                )
-            state["state"] = ("complete" if state["stages"][-1]["state"] == "complete"
+                    })
+                save()
+            state["active"] = releases.get(items[0]["name"]) or old.get("active")
+            state["state"] = ("complete" if all(s["state"] == "complete" for s in state["stages"])
                               else "needs_data")
         except Exception as exc:
             state["state"] = "failed"

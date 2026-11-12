@@ -1,10 +1,11 @@
-"""담당: 최적화 — 계획일별 48시간 예측 창으로 ESS 계획을 롤링 실행한다.
+"""최적화 — 계획일별 48시간 예측 창으로 ESS 계획을 롤링 실행한다.
 
 run_rolling 은 기간 전체의 시간별 값 한 줄을 받아 창을 자르지만, 예측은 발표분마다 같은 시각의 값이
 다르다. 그래서 계획일 D 마다 그 날의 PlanWindow(forecast_inputs)를 solve_window 에 넣고
 앞 24시간(D)만 확정한 뒤, 확정 구간 끝 에너지를 다음 계획일의 시작 에너지로 넘긴다.
 
-- 이월하는 것은 **계획상** SOC 다. 실측에 따른 실행 조정·정산은 하지 않는다 (다음 단계).
+- 이월하는 것은 **계획상** SOC 다. 실측에 따른 실행 조정·정산·실행 SOC 이월은 execution_rolling 이
+  맡는다 (이 모듈의 forecast/actual 비교 쌍은 그대로 둔다).
 - scenario="forecast" 는 window.forecast(예측 발전량·예측 가격), "actual" 은 window.actual
   (실측 발전량·실측 SMP)을 넣는다. 같은 창 목록·ESS 설정·최초 SOC·종료 정책으로 돌려 비교한다.
 - 계획일이 끊기면 연속 구간(segment)으로 나누고, 구간마다 설정값 SOC 에서 다시 시작한다.
@@ -37,6 +38,65 @@ from vpp.rec import RecParams
 
 SCENARIOS = ("forecast", "actual")
 COMMIT_HOURS = 24
+TERMINAL_MODES = ("last_day_only", "horizon_aware")
+
+
+@dataclass(frozen=True)
+class TerminalValue:
+    """종료 조건이 없는 창 끝의 잔량 1 MWh 평가액 (소프트 종료). 계획 시점 정보만 쓴다.
+
+    window_mean_sell_value: 그 창의 예측 판매 가치(SMP+REC, 음수는 0) 평균을 나중에 받을
+    단가로 보고, 방전 효율과 방전 열화비를 뺀 값. 단위 원/MWh.
+    = fraction × η_d × max(0, 평균 − 방전 열화비).
+    평가액은 계획 목적함수에만 들어가고 수익 집계에는 합산하지 않는다.
+    """
+
+    method: str = "window_mean_sell_value"
+    fraction: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.method != "window_mean_sell_value":
+            raise ValueError("terminal value method 는 window_mean_sell_value 만 지원합니다.")
+        if not (0 <= self.fraction <= 1):
+            raise ValueError("fraction 은 0~1 이어야 합니다.")
+
+    def value_krw_per_mwh(self, frame: pd.DataFrame, ess: EssParams) -> float:
+        from vpp.rec import effective_price_krw_per_mwh
+
+        mean_value = float(np.maximum(effective_price_krw_per_mwh(frame), 0.0).mean())
+        _, discharge_wear = ess.degradation().milp_coefficients(1)
+        return max(0.0, self.fraction * ess.discharge_efficiency
+                   * (mean_value - float(discharge_wear[0])))
+
+    def metadata(self) -> dict[str, Any]:
+        return {"method": self.method, "fraction": self.fraction, "unit": "krw_per_mwh",
+                "basis": "창의 예측 판매가치(SMP+REC) 평균 × 방전효율 − 방전 열화비. "
+                         "계획 시점 정보만",
+                "note": "평가액은 목적함수에만 반영. 수익에 합산하지 않음"}
+
+
+def window_terminal(
+    frame: pd.DataFrame, window_id: int, n_windows: int, period_start_energy: float, ess: EssParams,
+    *, terminal_mode: str = "last_day_only", terminal_value: TerminalValue | None = None,
+) -> tuple[pd.DataFrame, Terminal]:
+    """계획일 창의 (풀 구간, 종료 조건).
+
+    - last_day_only (기존): 구간 마지막 날만 24시간을 풀고 E[끝] ≥ 구간 시작 에너지. 그 전날
+      48시간 창은 구간 끝을 포함하는데도 종료 조건이 없어 D+1 잠정 계획이 실험 종료를 모른다.
+    - horizon_aware: 48시간 창이 구간 끝을 포함하는 날(마지막 전날)부터 창 끝에 같은 조건을
+      미리 건다. 마지막 날은 24시간 + 같은 조건. 비교의 시작·종료 잔량 기준은 그대로다.
+    종료 조건이 없는 창에는 terminal_value 가 있으면 창 끝 잔량 평가(소프트)를 둔다.
+    """
+    if terminal_mode not in TERMINAL_MODES:
+        raise ValueError(f"terminal_mode 는 {TERMINAL_MODES} 중 하나여야 합니다: {terminal_mode!r}")
+    is_last = window_id == n_windows - 1
+    if is_last:
+        return frame.iloc[:COMMIT_HOURS], Terminal.period_end_ge_initial(period_start_energy)
+    if terminal_mode == "horizon_aware" and window_id == n_windows - 2:
+        return frame, Terminal.period_end_ge_initial(period_start_energy)
+    if terminal_value is not None:
+        return frame, Terminal.valued(terminal_value.value_krw_per_mwh(frame, ess))
+    return frame, Terminal()
 
 
 @dataclass(frozen=True)
@@ -74,9 +134,15 @@ def run_segment(
     *,
     segment_id: int = 0,
     rec: RecParams | None = None,
+    terminal_mode: str = "last_day_only",
+    terminal_value: TerminalValue | None = None,
     tol: float = 1e-6,
 ) -> SegmentResult:
-    """연속 계획일 창 목록을 순서대로 풀어 확정 계획을 잇는다. 끊긴 구간이 섞이면 예외."""
+    """연속 계획일 창 목록을 순서대로 풀어 확정 계획을 잇는다. 끊긴 구간이 섞이면 예외.
+
+    terminal_mode / terminal_value 는 window_terminal 참고. 기본은 기존 방식
+    (last_day_only, 평가 없음).
+    """
     if not segment:
         raise ValueError("빈 구간입니다.")
     days = [w.planning_day for w in segment]
@@ -92,11 +158,11 @@ def run_segment(
     for window_id, window in enumerate(segment):
         frame = _inputs(window, scenario, rec)
         is_last = window_id == len(segment) - 1
-        # 백테스트 구간 종료 규칙: 마지막 계획일은 D 24시간만 풀고 E[끝] ≥ 구간 시작 에너지
-        # (run_rolling 의 rolling48 과 동일). 그 외는 48h 풀고 24h 확정. 운영계획은 이 규칙을
-        # 쓰지 않고 항상 48h 를 푼다 (operating_plan).
-        block = frame.iloc[:COMMIT_HOURS] if is_last else frame
-        terminal = Terminal.period_end_ge_initial(period_start_energy) if is_last else Terminal()
+        # 구간 종료 규칙은 window_terminal. 운영계획은 이 규칙을 쓰지 않고 항상 48h 를 푼다.
+        block, terminal = window_terminal(
+            frame, window_id, len(segment), period_start_energy, ess,
+            terminal_mode=terminal_mode, terminal_value=terminal_value,
+        )
         plan = plan_window(block, ess, start, commit_hours=COMMIT_HOURS, terminal=terminal, tol=tol)
         if is_last:
             terminal_cost = terminal_constraint_cost_krw(
@@ -143,11 +209,13 @@ def run_segment(
 
 def run_scenario(
     windows: list[PlanWindow], ess: EssParams, scenario: str, *,
-    rec: RecParams | None = None, tol: float = 1e-6,
+    rec: RecParams | None = None, terminal_mode: str = "last_day_only",
+    terminal_value: TerminalValue | None = None, tol: float = 1e-6,
 ) -> list[SegmentResult]:
     """창 목록을 연속 구간으로 나눠 각각 설정값 SOC 에서 시작해 푼다."""
     return [
-        run_segment(segment, ess, scenario, segment_id=i, rec=rec, tol=tol)
+        run_segment(segment, ess, scenario, segment_id=i, rec=rec, terminal_mode=terminal_mode,
+                    terminal_value=terminal_value, tol=tol)
         for i, segment in enumerate(contiguous_segments(windows))
     ]
 

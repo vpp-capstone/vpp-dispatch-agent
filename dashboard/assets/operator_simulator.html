@@ -1,19 +1,19 @@
 <!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Apple SD Gothic Neo",sans-serif;color:#dce7f6;background:#101e30}
-.shell{border-radius:18px;overflow:hidden;background:radial-gradient(ellipse at 40% 30%,#1a3446,#101e30 70%);padding:22px 24px}
-.top{display:flex;justify-content:space-between;gap:18px;align-items:center}.eyebrow{font-size:11px;letter-spacing:2px;color:#76d8c9;margin-bottom:6px}.title{font-size:19px;font-weight:750;color:white}.badge{font-size:12px;border:1px solid #425269;border-radius:20px;padding:7px 12px;color:#b7c7dc;white-space:nowrap}
-.tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:18px 0 8px}button,select{font:inherit;font-size:13px;border:1px solid #456078;border-radius:8px;background:#21354a;color:#e4effa;padding:9px 13px;cursor:pointer}button:hover{background:#34526b}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #fbbf24;outline-offset:3px}#play{background:#57dfbe;color:#0b252c;border-color:#57dfbe;font-weight:750;min-width:120px}select{max-width:100%}.clock{margin-left:auto;font-size:27px;font-weight:750;font-variant-numeric:tabular-nums;color:#fff}.mode-note{color:#abc0d5;font-size:12px;line-height:1.5;margin:8px 0 0}
-.scene{width:100%;display:block;height:auto;min-height:230px;max-height:330px}svg text{font-family:inherit;fill:#dce7f6}svg .sub{font-size:12px;fill:#9bb0c6}svg .value{font-size:26px;font-weight:750;fill:white}svg .node{fill:#172e43;stroke:#355268;stroke-width:1.5}.pipe{fill:none;stroke:#304b5e;stroke-width:5}.flow{fill:none;stroke-width:4;stroke-dasharray:4 12;stroke-linecap:round;animation:move 1.2s linear infinite;opacity:0}.on{opacity:1}.paused .flow,.paused .rotor,.paused .sun{animation-play-state:paused}.rotor{transform-box:fill-box;transform-origin:center;animation:spin 3s linear infinite}.sun{transform-box:fill-box;transform-origin:center;animation:spin 25s linear infinite}.battery-fill{transition:width .45s ease}.no-flow{opacity:.35}.reason{padding:11px 14px;border-left:3px solid #57dfbe;background:#1b3445;border-radius:7px;font-size:14px;line-height:1.5;color:#e5f7f3;min-height:43px}
-.timeline{margin:14px 0 10px}#scrub{width:100%;accent-color:#57dfbe;cursor:pointer;margin:0}#ticks{display:flex;justify-content:space-between;color:#94aac0;font-size:11px;padding:2px 3px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:14px 0}.stat{background:#192d41;border:1px solid #2c4358;border-radius:9px;padding:12px}.label{color:#a8bdd2;font-size:11px}.num{font-size:20px;font-weight:750;color:white;margin-top:6px}.num small{font-size:11px;color:#a8bdd2;font-weight:500}.compare{padding:10px 13px;border:1px solid #5a523c;background:#2a2c2a;border-radius:8px;color:#e5cf9f;font-size:12px;line-height:1.65}.foot{font-size:11px;color:#91a7bf;line-height:1.55;margin:10px 0 0}.mobile{display:none}
-.soc-strip{margin:16px 0;padding:14px;border:1px solid #3c645f;border-radius:12px;background:#142c3b}.soc-heading{font-size:13px;font-weight:700;color:#a5ecdc;margin-bottom:12px}.soc-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.soc-card{padding:10px;background:#1c3547;border-radius:8px}.soc-card.today{border:1px solid #57dfbe}.soc-card strong{display:block;font-size:24px;color:#fff;margin-top:5px}.soc-card span{font-size:12px;color:#b4c8d8}.carry-note{font-size:12px;line-height:1.7;color:#a5ecdc;margin-top:10px}.carry-note.warning{color:#ffd08a}.soc-help{color:#9bb0c6;font-size:11px;margin:8px 0 0}@media(max-width:650px){.soc-cards{grid-template-columns:repeat(2,1fr)}}
+*{box-sizing:border-box}body{margin:0;font-family:"Apple SD Gothic Neo","Pretendard","Noto Sans KR",system-ui,sans-serif;color:#1f2d36;background:#f5f7f8}
+.shell{border-radius:10px;overflow:hidden;background:#ffffff;border:1px solid #d8e1e7;padding:22px 24px}
+.top{display:flex;justify-content:space-between;gap:18px;align-items:center}.eyebrow{font-size:12px;letter-spacing:0;color:#187263;font-weight:600;margin-bottom:6px}.title{font-size:19px;font-weight:750;color:#173a44}.badge{font-size:12px;border:1px solid #d8e1e7;background:#f5f7f8;border-radius:999px;padding:7px 12px;color:#5f7481;white-space:nowrap}
+.tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:18px 0 8px}button,select{font:inherit;font-size:13px;border:1px solid #c9d6de;border-radius:6px;background:#ffffff;color:#173a44;padding:9px 13px;cursor:pointer}button:hover{background:#eef3f5}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #187263;outline-offset:2px}#play{background:#1f8f7a;color:#ffffff;border-color:#187263;font-weight:750;min-width:120px}select{max-width:100%}.clock{margin-left:auto;font-size:27px;font-weight:750;font-variant-numeric:tabular-nums;color:#173a44}.mode-note{color:#5f7481;font-size:12px;line-height:1.5;margin:8px 0 0}
+.scene{width:100%;display:block;height:auto;min-height:230px;max-height:330px}svg text{font-family:inherit;fill:#1f2d36}svg .sub{font-size:12px;fill:#5f7481}svg .value{font-size:26px;font-weight:750;fill:#173a44}svg .node{fill:#f5f7f8;stroke:#c9d6de;stroke-width:1.5}.pipe{fill:none;stroke:#dfe6eb;stroke-width:5}.flow{fill:none;stroke-width:4;stroke-dasharray:4 12;stroke-linecap:round;animation:move 1.2s linear infinite;opacity:0}.on{opacity:1}.paused .flow,.paused .rotor,.paused .sun{animation-play-state:paused}.rotor{transform-box:fill-box;transform-origin:center;animation:spin 3s linear infinite}.sun{transform-box:fill-box;transform-origin:center;animation:spin 25s linear infinite}.battery-fill{transition:width .45s ease}.no-flow{opacity:.35}.reason{padding:11px 14px;border-left:3px solid #1f8f7a;background:#e3f3ee;border-radius:7px;font-size:14px;line-height:1.5;color:#173a44;min-height:43px}
+.timeline{margin:14px 0 10px}#scrub{width:100%;accent-color:#187263;cursor:pointer;margin:0}#ticks{display:flex;justify-content:space-between;color:#5f7481;font-size:12px;padding:2px 3px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:14px 0}.stat{border-top:1px solid #dfe7ec;padding:12px 0}.label{color:#5f7481;font-size:12px}.num{font-size:20px;font-weight:750;color:#173a44;margin-top:6px}.num small{font-size:12px;color:#5f7481;font-weight:500}.compare{padding:10px 13px;border:1px solid #e1e8ed;background:#f5f7f8;border-radius:6px;color:#173a44;font-size:12px;line-height:1.65}.foot{font-size:12px;color:#5f7481;line-height:1.55;margin:10px 0 0}.mobile{display:none}
+.soc-strip{margin:16px 0;padding:14px 0;border-top:1px solid #d5dfe3;border-bottom:1px solid #d5dfe3;background:#fff}.soc-heading{font-size:13px;font-weight:700;color:#1f6e5d;margin-bottom:12px}.soc-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.soc-card{padding:8px 12px;border-left:1px solid #dfe7ec}.soc-card:first-child{border-left:0}.soc-card.today strong{color:#187263}.soc-card strong{display:block;font-size:24px;color:#173a44;margin-top:5px}.soc-card span{font-size:12px;color:#5f7481}.carry-note{font-size:12px;line-height:1.7;color:#1f6e5d;margin-top:10px}.carry-note.warning{color:#96600f}.soc-help{color:#5f7481;font-size:12px;margin:8px 0 0}@media(max-width:650px){.soc-cards{grid-template-columns:repeat(2,1fr)}}
 @keyframes move{to{stroke-dashoffset:-32}}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:650px){.shell{padding:14px}.top{align-items:start}.title{font-size:16px}.badge{font-size:10px}.stats{grid-template-columns:repeat(2,1fr)}.clock{font-size:22px}.scene{min-height:185px}.num{font-size:17px}.tools{gap:5px}button,select{font-size:12px;padding:8px}.reason{font-size:12px}}
 @media(prefers-reduced-motion:reduce){.flow,.rotor,.sun{animation:none!important}.battery-fill{transition:none}}
 </style></head><body>
 <main class="shell paused" id="shell">
-<div class="top"><div><div class="eyebrow">JEJU VPP · OPERATIONS REPLAY</div><div class="title">전기는 지금 어디로 가고 있나요?</div></div><span class="badge">저장된 계획 재생 · 실시간 운전 아님</span></div>
+<div class="top"><div><div class="eyebrow">운영계획 재생</div><div class="title">시간별 전력 흐름 · 발전 → 판매 / 저장</div></div><span class="badge">저장된 계획 재생 · 실시간 운전 아님</span></div>
 <section class="soc-strip" aria-label="하루 시작과 종료 SOC 및 날짜 간 이월">
 <div class="soc-heading">하루 잔량 연결 · SOC = 배터리에 남은 전력 비율</div>
 <div class="soc-cards">
@@ -22,65 +22,72 @@
 <div class="soc-card today"><span>오늘 종료 · 24시 운전 후</span><strong id="dayEndSoc"></strong></div>
 <div class="soc-card"><span id="nextDayLabel">다음 날 시작</span><strong id="nextDaySoc"></strong></div>
 </div><div class="carry-note" id="carryNote" role="status"></div>
-<p class="soc-help">선택한 계획의 하루 요약입니다. 시간 막대를 움직여도 유지되며, 실제 실행 잔량은 아닙니다.</p>
+<p class="soc-help">하루 시작·종료 잔량은 시간 이동과 관계없이 고정됩니다.</p>
 </section>
-<div class="tools"><button id="play" aria-label="하루 재생">▶ 하루 재생</button><button id="prev" aria-label="이전 시간">‹</button><button id="next" aria-label="다음 시간">›</button><select id="mode" aria-label="재생할 계획"><option value="forecast">예측으로 세운 계획</option><option value="actual">실측을 미리 알고 다시 세운 계획</option></select><select id="speed" aria-label="재생 속도"><option value="1600">보통 속도</option><option value="700">빠르게</option><option value="3000">천천히</option></select><output class="clock" id="clock">00:00</output></div>
+<div class="tools"><button id="play" aria-label="하루 재생">▶ 하루 재생</button><button id="prev" aria-label="이전 시간">‹</button><button id="next" aria-label="다음 시간">›</button><select id="mode" aria-label="재생할 계획"><option value="forecast">예측으로 세운 계획</option><option value="actual">실측을 미리 알고 다시 세운 계획</option><option value="executed">확정 계획을 실측에 적용한 실행 결과</option></select><select id="speed" aria-label="재생 속도"><option value="1600">보통 속도</option><option value="700" selected>빠르게</option><option value="3000">천천히</option></select><output class="clock" id="clock">00:00</output></div>
 <p class="mode-note" id="modeNote"></p>
 <svg class="scene" viewBox="0 0 980 320" role="img" aria-label="재생에너지 발전소에서 판매와 배터리 저장으로 흐르는 전력량">
-<defs><linearGradient id="batteryGradient"><stop stop-color="#169a95"/><stop offset="1" stop-color="#75efd0"/></linearGradient></defs>
-<path class="pipe" d="M274 111 H435"/><path id="flowGen" class="flow" stroke="#f4cb68" d="M274 111 H435"/>
-<path class="pipe" d="M530 111 H704"/><path id="flowSale" class="flow" stroke="#57dfbe" d="M530 111 H704"/>
-<path class="pipe" d="M465 147 V212"/><path id="flowCharge" class="flow" stroke="#69b7ff" d="M465 147 V212"/>
-<path class="pipe" d="M508 212 V147"/><path id="flowDischarge" class="flow" stroke="#d5a3ff" d="M508 212 V147"/>
-<path class="pipe" d="M275 140 L337 212"/><path id="flowCurtail" class="flow" stroke="#f7a27e" d="M275 140 L337 212"/>
+<defs><linearGradient id="batteryGradient"><stop stop-color="#1f8f7a"/><stop offset="1" stop-color="#6fd0b8"/></linearGradient></defs>
+<path class="pipe" d="M274 111 H435"/><path id="flowGen" class="flow" stroke="#c99a1a" d="M274 111 H435"/>
+<path class="pipe" d="M530 111 H704"/><path id="flowSale" class="flow" stroke="#1f8f7a" d="M530 111 H704"/>
+<path class="pipe" d="M465 147 V212"/><path id="flowCharge" class="flow" stroke="#2f6fb3" d="M465 147 V212"/>
+<path class="pipe" d="M508 212 V147"/><path id="flowDischarge" class="flow" stroke="#7a4fb8" d="M508 212 V147"/>
+<path class="pipe" d="M275 140 L337 212"/><path id="flowCurtail" class="flow" stroke="#c8653a" d="M275 140 L337 212"/>
 <rect class="node" x="15" y="40" width="260" height="130" rx="14"/>
-<g class="sun" stroke="#f4cb68" stroke-width="2.5"><circle cx="53" cy="76" r="12" fill="#f4cb68"/><path d="M53 54v-5 M53 98v5 M31 76h-5 M75 76h5 M37 60l-4-4 M69 92l4 4 M37 92l-4 4 M69 60l4-4"/></g>
-<path d="M100 95V73" stroke="#7cc9d1" stroke-width="3"/><g class="rotor" stroke="#7cc9d1" stroke-width="3"><path d="M100 72V53 M100 72l-17 10 M100 72l17 10"/><circle cx="100" cy="72" r="3" fill="#7cc9d1"/></g>
+<g class="sun" stroke="#c99a1a" stroke-width="2.5"><circle cx="53" cy="76" r="12" fill="#c99a1a"/><path d="M53 54v-5 M53 98v5 M31 76h-5 M75 76h5 M37 60l-4-4 M69 92l4 4 M37 92l-4 4 M69 60l4-4"/></g>
+<path d="M100 95V73" stroke="#3b8ea5" stroke-width="3"/><g class="rotor" stroke="#3b8ea5" stroke-width="3"><path d="M100 72V53 M100 72l-17 10 M100 72l17 10"/><circle cx="100" cy="72" r="3" fill="#3b8ea5"/></g>
 <text x="130" y="75" font-size="15" font-weight="700">재생에너지</text><text x="130" y="94" class="sub">태양광 18곳 + 풍력 3곳</text>
 <text id="genValue" class="value" x="36" y="135">0.00 MWh</text><text id="genLabel" x="37" y="155" class="sub">이 시간 예측 발전량</text>
-<circle cx="483" cy="111" r="47" fill="#1a3c4d" stroke="#5edcc2" stroke-width="2"/><text x="483" y="108" text-anchor="middle" font-size="17" font-weight="750">운영계획</text><text x="483" y="128" text-anchor="middle" class="sub">MILP</text>
+<circle cx="483" cy="111" r="47" fill="#e3f3ee" stroke="#1f8f7a" stroke-width="2"/><text x="483" y="108" text-anchor="middle" font-size="17" font-weight="750">운영계획</text><text x="483" y="128" text-anchor="middle" class="sub">MILP</text>
 <rect class="node" x="705" y="40" width="260" height="130" rx="14"/>
-<g stroke="#70d9ba" stroke-width="2" fill="none"><path d="M730 92V65h16v27 M751 92V55h16v37 M772 92V73h16v19 M727 93h64"/><path d="M735 72h6 M735 80h6 M756 63h6 M756 72h6 M756 81h6"/></g>
+<g stroke="#1f8f7a" stroke-width="2" fill="none"><path d="M730 92V65h16v27 M751 92V55h16v37 M772 92V73h16v19 M727 93h64"/><path d="M735 72h6 M735 80h6 M756 63h6 M756 72h6 M756 81h6"/></g>
 <text x="806" y="77" font-size="15" font-weight="700">계통에 판매</text><text x="806" y="97" class="sub">낙찰·정산은 별도</text>
 <text id="sellValue" class="value" x="726" y="135">0.00 MWh</text><text id="sellPrice" x="727" y="155" class="sub"></text>
-<text id="chargeLabel" x="445" y="190" text-anchor="end" fill="#69b7ff" font-size="12">충전 0.00</text><text id="dischargeLabel" x="526" y="190" fill="#d5a3ff" font-size="12">방전 0.00</text>
+<text id="chargeLabel" x="445" y="190" text-anchor="end" fill="#2f6fb3" font-size="12">충전 0.00</text><text id="dischargeLabel" x="526" y="190" fill="#7a4fb8" font-size="12">방전 0.00</text>
 <rect class="node" x="364" y="212" width="290" height="96" rx="14"/>
-<rect x="383" y="244" width="97" height="36" rx="5" fill="#0c1c2b" stroke="#7c9cac" stroke-width="2"/><rect x="481" y="255" width="5" height="14" rx="2" fill="#7c9cac"/><rect class="battery-fill" id="batteryFill" x="388" y="249" width="0" height="26" rx="2" fill="url(#batteryGradient)"/>
+<rect x="383" y="244" width="97" height="36" rx="5" fill="#ffffff" stroke="#5f7481" stroke-width="2"/><rect x="481" y="255" width="5" height="14" rx="2" fill="#5f7481"/><rect class="battery-fill" id="batteryFill" x="388" y="249" width="0" height="26" rx="2" fill="url(#batteryGradient)"/>
 <text x="383" y="233" class="sub">ESS · 선택 구간 종료 SOC</text><text id="socValue" x="507" y="253" font-size="25" font-weight="750">50%</text><text id="socDetail" x="508" y="274" class="sub"></text><text id="socTransition" x="383" y="297" class="sub"></text>
-<text x="230" y="237" fill="#f7a27e" font-size="13">판매하지 않은 양</text><text id="curtailValue" x="230" y="259" class="sub">0.00 MWh</text>
+<text x="230" y="237" fill="#a84f28" font-size="13">판매하지 않은 양</text><text id="curtailValue" x="230" y="259" class="sub">0.00 MWh</text>
 <text x="726" y="234" class="sub">에너지 균형</text><text x="726" y="257" font-size="12">발전 + 방전 = 판매 + 충전 + 감축</text><text x="726" y="279" class="sub">MWh: 이 1시간 동안의 전력량</text>
 </svg>
 <div class="reason" id="reason" role="status" aria-live="polite"></div>
 <div class="timeline"><input id="scrub" type="range" min="0" max="23" value="0" step="1" aria-label="시간 이동"><div id="ticks"><span>00시</span><span>06시</span><span>12시</span><span>18시</span><span>23시</span></div></div>
 <div class="stats"><div class="stat"><div class="label">이 시간 SMP</div><div class="num" id="price"></div></div><div class="stat"><div class="label">REC 가산 단가 · 실험 가정</div><div class="num" id="rec"></div></div><div class="stat"><div class="label">이 1시간의 계획 순수익</div><div class="num" id="profit"></div></div><div class="stat"><div class="label">선택한 날 누적 계획 순수익</div><div class="num" id="cumulative"></div></div></div>
 <div class="compare" id="compare"></div>
-<p class="foot">재생은 저장된 시간별 계획을 보여줍니다. 순수익 = 판매량 × (SMP + REC) − 열화비. 실제 운전·정산 수익이 아니며, 충전 손실은 잔량 계산에 반영돼 있습니다. 재생 속도는 계산 결과를 바꾸지 않습니다.</p>
+<p class="foot">계획 순수익 = 판매량 × (SMP + REC) − 열화비 · 충전 손실은 잔량에 반영</p>
 </main>
 <script id="replay-data" type="application/json">__REPLAY_DATA__</script>
 <script>
 const data=JSON.parse(document.getElementById('replay-data').textContent);
 const $=id=>document.getElementById(id),fmt=(n,d=2)=>Number(n).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
 let index=0,mode='forecast',playing=false,timer=null;
+if(!data.actualAvailable){const opt=$('mode').querySelector('option[value="actual"]');if(opt)opt.remove();}
+if(!data.executionAvailable){const opt=$('mode').querySelector('option[value="executed"]');if(opt)opt.remove();}
+if($('mode').options.length<2)$('mode').disabled=true;
+const isExec=()=>mode==='executed';
 function stop(){playing=false;clearInterval(timer);timer=null;$('play').textContent='▶ 하루 재생';$('play').setAttribute('aria-label','하루 재생');$('shell').classList.add('paused');}
 function play(){if(index===data.series[mode].length-1)index=0;playing=true;$('play').textContent='Ⅱ 일시정지';$('play').setAttribute('aria-label','일시정지');$('shell').classList.remove('paused');render();clearInterval(timer);timer=setInterval(()=>{if(index>=data.series[mode].length-1){stop();return;}index++;render();},Number($('speed').value));}
 function flow(id,value){$(id).classList.toggle('on',value>0.000001);}
 function render(){const row=data.series[mode][index];$('clock').textContent=row.hour+'–'+String(index+1).padStart(2,'0')+':00';$('scrub').value=index;$('scrub').max=data.series[mode].length-1;$('scrub').setAttribute('aria-valuetext',row.hour);
 const daily=data.dailySoc[mode],percent=n=>n===null?'—':fmt(n,1)+'%';
+document.querySelector('.eyebrow').textContent=isExec()?'실행 결과 재생':'운영계획 재생';document.querySelector('.badge').textContent=isExec()?'저장된 실행 결과 재생 · 실시간 운전 아님':'저장된 계획 재생 · 실시간 운전 아님';
 $('prevDaySoc').textContent=percent(daily.previous.soc);$('dayStartSoc').textContent=percent(daily.start);$('dayEndSoc').textContent=percent(daily.end);$('nextDaySoc').textContent=percent(daily.next.soc);
 const dayDate=new Date(data.day+'T12:00:00Z'),dateLabel=offset=>{const d=new Date(dayDate);d.setUTCDate(d.getUTCDate()+offset);return (d.getUTCMonth()+1)+'/'+d.getUTCDate();};
 $('prevDayLabel').textContent=dateLabel(-1)+' 전날 종료';$('nextDayLabel').textContent=dateLabel(1)+' 다음 날 시작';
 const carryText=(b,label)=>label+' · '+({matched:'잔량 그대로 이월',missing:'인접 시간 자료 없음 · 연속성 확인 불가',reset:'별도 계산 구간 · 잔량 이월 아님',mismatch:'잔량 불일치 · 확인 필요'}[b.status]);
 $('carryNote').textContent=carryText(daily.previous,'전날 → 오늘')+' / '+carryText(daily.next,'오늘 → 다음 날');
 $('carryNote').classList.toggle('warning',daily.previous.status!=='matched'||daily.next.status!=='matched');
-$('modeNote').textContent=data.day+' · '+(mode==='forecast'?'예측 발전량·가격을 믿고 만든 계획을 재생합니다. 실제 값은 아래에서 비교합니다.':'실제 발전량·가격을 미리 알았다고 가정해 다시 최적화한 비교 계획입니다. 실제 운전 기록이 아닙니다.');
-$('genLabel').textContent=mode==='forecast'?'이 시간 예측 발전량':'이 시간 실측 발전량';$('genValue').textContent=fmt(row.g)+' MWh';$('sellValue').textContent=fmt(row.q)+' MWh';$('sellPrice').textContent='SMP + REC = '+fmt(row.p+row.rec,1)+' 원/kWh';
+$('modeNote').textContent=data.day+' · '+(isExec()?'확정 판매계획을 고정한 채 실측 발전량에 맞춰 ESS 를 운전한 결과입니다. 정산은 실측 SMP 를 하루전·편차 가격으로 쓴 실험 가정입니다.':mode==='forecast'?(data.actualAvailable?'예측 발전량·가격을 믿고 만든 계획을 재생합니다. 실제 값은 아래에서 비교합니다.':'예측 발전량·가격으로 세운 계획'):'실제 발전량·가격을 미리 알았다고 가정해 다시 최적화한 비교 계획입니다. 실제 운전 기록이 아닙니다.');
+$('genLabel').textContent=mode==='forecast'?'이 시간 예측 발전량':isExec()?'이 시간 실측 발전량 (예측 '+fmt(row.forecastG)+')':'이 시간 실측 발전량';$('genValue').textContent=fmt(row.g)+' MWh';$('sellValue').textContent=fmt(row.q)+' MWh'+(isExec()?' / 계획 '+fmt(row.committed):'');$('sellPrice').textContent='SMP + REC = '+fmt(row.p+row.rec,1)+' 원/kWh';
 $('chargeLabel').textContent='충전 '+fmt(row.c)+' MWh';$('dischargeLabel').textContent='방전 '+fmt(row.d)+' MWh';$('curtailValue').textContent=fmt(row.r)+' MWh';
 $('socValue').textContent=fmt(row.soc,1)+'%';$('socDetail').textContent=fmt(row.e)+' / '+fmt(data.capacity,0)+' MWh';$('socTransition').textContent=row.hour.slice(0,2)+'시 '+fmt(row.startSoc,1)+'% → '+String(index+1).padStart(2,'0')+'시 '+fmt(row.soc,1)+'%';$('batteryFill').setAttribute('width',87*Math.max(0,Math.min(100,row.soc))/100);
 flow('flowGen',row.g);flow('flowSale',row.q);flow('flowCharge',row.c);flow('flowDischarge',row.d);flow('flowCurtail',row.r);
-let message=row.c>0.000001?'저장 중 · 발전한 전력 중 '+fmt(row.c)+' MWh를 배터리에 충전합니다.':row.d>0.000001?'방전 중 · 배터리에서 '+fmt(row.d)+' MWh를 꺼내 판매에 보탭니다.':'대기 중 · 배터리 충방전 없이 '+fmt(row.q)+' MWh를 판매하도록 계획했습니다.';
+let message=row.c>0.000001?'저장 중 · 발전한 전력 중 '+fmt(row.c)+' MWh를 배터리에 충전합니다.':row.d>0.000001?'방전 중 · 배터리에서 '+fmt(row.d)+' MWh를 꺼내 판매에 보탭니다.':'대기 중 · 배터리 충방전 없이 '+fmt(row.q)+' MWh를 '+(isExec()?'공급했습니다.':'판매하도록 계획했습니다.');
+if(isExec()){message+=' 계획 충전 '+fmt(row.plannedC)+' · 계획 방전 '+fmt(row.plannedD)+' MWh.';if(row.shortfall>0.000001)message+=' 확정 판매량보다 '+fmt(row.shortfall)+' MWh 부족.';if(row.surplus>0.000001)message+=' 확정 판매량보다 '+fmt(row.surplus)+' MWh 초과 공급.';}
 if(row.r>0.000001)message+=' '+fmt(row.r)+' MWh는 판매하지 않습니다.';$('reason').textContent=message;
 $('price').innerHTML=fmt(row.p,1)+' <small>원/kWh</small>';$('rec').innerHTML=fmt(row.rec,1)+' <small>원/kWh</small>';$('profit').innerHTML=fmt(row.profit/10000,1)+' <small>만 원</small>';$('cumulative').innerHTML=fmt(row.cumulative/10000,1)+' <small>만 원</small>';
-const genDelta=row.actualG-row.g;$('compare').textContent=mode==='forecast'?'실제 값과 비교 · 발전량 '+fmt(row.actualG)+' MWh (예측보다 '+(genDelta>=0?'+':'')+fmt(genDelta)+') · SMP '+fmt(row.actualP,1)+'원/kWh. 이 오차에 따른 추가 충방전·정산은 아직 계산하지 않았습니다.':'비교 기준 보기 · 실제 값을 미리 알 때의 계획입니다. 예측 계획을 실제 상황에 적용한 결과와는 다릅니다.';
+document.querySelectorAll('.stat .label')[2].textContent=isExec()?'이 1시간의 실행 순수익':'이 1시간의 계획 순수익';document.querySelectorAll('.stat .label')[3].textContent=isExec()?'선택한 날 누적 실행 순수익':'선택한 날 누적 계획 순수익';document.querySelectorAll('.stat .label')[0].textContent=isExec()?'이 시간 정산 가격 (실측 SMP)':'이 시간 SMP';
+$('compare').hidden=row.actualG===null&&!isExec();const genDelta=row.actualG-row.g;$('compare').textContent=isExec()?'확정 판매 '+fmt(row.committed)+' MWh → 실제 공급 '+fmt(row.q)+' MWh · 부족 '+fmt(row.shortfall)+' / 초과 '+fmt(row.surplus)+' MWh · 편차 정산 '+fmt(row.deviation/10000,1)+'만 원 · 계획 SOC '+fmt(row.plannedSoc,1)+'% vs 실행 '+fmt(row.soc,1)+'%':row.actualG===null?'실측 없음 · 예측 발전량·가격으로 세운 계획입니다. 실측이 들어오면 같은 시각의 실제 값을 여기서 비교합니다.':mode==='forecast'?'실제 값과 비교 · 발전량 '+fmt(row.actualG)+' MWh (예측보다 '+(genDelta>=0?'+':'')+fmt(genDelta)+') · SMP '+fmt(row.actualP,1)+'원/kWh.'+(data.executionAvailable?' 이 오차를 반영한 실행 결과는 재생 선택에서 봅니다.':' 실행·정산은 실측 정산 자료가 있을 때 계산합니다.'):'비교 기준 보기 · 실제 값을 미리 알 때의 계획입니다. 예측 계획을 실제 상황에 적용한 결과와는 다릅니다.';
 }
 $('play').onclick=()=>playing?stop():play();$('prev').onclick=()=>{stop();index=Math.max(0,index-1);render();};$('next').onclick=()=>{stop();index=Math.min(data.series[mode].length-1,index+1);render();};$('scrub').oninput=()=>{stop();index=Number($('scrub').value);render();};$('mode').onchange=()=>{stop();mode=$('mode').value;render();};$('speed').onchange=()=>{if(playing)play();};document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});render();
 </script></body></html>

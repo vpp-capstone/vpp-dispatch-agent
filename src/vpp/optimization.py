@@ -1,4 +1,4 @@
-"""담당: 최적화·대시보드팀 — ESS 운영계획 v0 (MILP, scipy.optimize.milp).
+"""최적화 & 대시보드팀 
 
 단위: 에너지 MWh, 출력 MW, 가격 원/MWh, 구간 길이 h. 에너지 변수에 dt를 다시 곱하지 않는다.
 수식·가정은 docs/formulation.md 참조. 가격에 실측 하루전 SMP를 넣는 것은 완전예측 백테스트이며
@@ -141,6 +141,9 @@ class WindowResult:
     solver_status: str
     mip_gap: float
     rec_revenue_krw: float = 0.0  # REC 가산 × 판매량 (REC 미적용이면 0). objective 에 포함됨
+    # 창 끝 잔량 평가액 (Terminal.value_krw_per_mwh × E[끝]). 목적함수에만 들어가고 objective_krw
+    # (= 판매 + REC − 열화비)에는 포함하지 않는다. 실제 판매 수익에 합산하지 않는다.
+    terminal_value_krw: float = 0.0
     checks: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -223,6 +226,7 @@ def solve_window(
     *,
     final_energy_max_mwh: float | None = None,
     rec_krw_per_mwh=None,
+    terminal_value_krw_per_mwh: float | None = None,
     tol: float = 1e-6,
 ) -> WindowResult:
     """한 창을 MILP로 푼다 (docs/formulation.md §2).
@@ -233,6 +237,9 @@ def solve_window(
     rec_krw_per_mwh: 구간별 REC 판매 단가 가산(원/MWh, vpp.rec). None이면 REC 미적용.
         판매 1 MWh 의 목적함수 계수가 SMP + 가산이 된다. sales_revenue_krw 는 SMP 분만,
         rec_revenue_krw 는 가산 분이며 objective_krw = sales + rec − 열화비.
+    terminal_value_krw_per_mwh: 창 끝 잔량 1 MWh 의 평가액(원). 목적함수에 + value × E[끝] 로
+        들어가 창 끝에서 잔량을 버리지 않게 한다. 평가액은 terminal_value_krw 에 따로 적고
+        objective_krw 에는 넣지 않는다 (실제 판매 수익이 아니다). None 이면 0.
     최적해가 아니거나 결과 검산에 실패하면 예외.
     """
     g, price, dt = (
@@ -285,6 +292,11 @@ def solve_window(
     objective = np.zeros(6 * n)
     # milp 는 최소화. 판매 계수는 SMP(+REC 가산), 충·방전 계수는 열화비.
     objective[q], objective[c], objective[d] = -sell_value, charge_wear, discharge_wear
+    terminal_value = (0.0 if terminal_value_krw_per_mwh is None
+                      else float(terminal_value_krw_per_mwh))
+    if not math.isfinite(terminal_value) or terminal_value < 0:
+        raise ValueError("창 끝 잔량 평가액은 0 이상 유한해야 합니다.")
+    objective[e[-1]] = -terminal_value  # 창 끝 잔량 평가 (선택). 집계 수익에는 넣지 않는다.
     integrality = np.zeros(6 * n, dtype=int)
     integrality[z] = 1
 
@@ -319,6 +331,7 @@ def solve_window(
     sell, charge, discharge, curtailed, energy = (x[idx] for idx in (q, c, d, r, e))
     sales = float(price @ sell)
     wear_cost = degradation.cost_for_arrays(charge, discharge)
+    valuation = terminal_value * float(energy[-1])
     window = WindowResult(
         sell_mwh=sell,
         charge_mwh=charge,
@@ -329,12 +342,13 @@ def solve_window(
         initial_energy_mwh=start,
         sales_revenue_krw=sales,
         throughput_cost_krw=wear_cost,
-        objective_krw=float(-result.fun),
+        objective_krw=float(-result.fun) - valuation,  # 판매 + REC − 열화비 (평가액 제외)
         # ESS 없음 기준과 같은 판매/감축 규칙: 판매 가치(SMP+REC) ≥ 0 이면 전량 판매
         no_ess_same_curtailment_policy_krw=float(np.maximum(sell_value, 0) @ g),
         solver_status="optimal",
         mip_gap=float(result.mip_gap),
         rec_revenue_krw=0.0 if rec is None else float(rec @ sell),
+        terminal_value_krw=valuation,
     )
     plan = window.to_frame(g, price, dt, rec)
     checks = check_plan(
@@ -394,11 +408,14 @@ class Terminal:
     - none: 제약 없음 (운영계획 48시간, 백테스트의 마지막이 아닌 날)
     - period_end_ge_initial: E[끝] ≥ 기간 시작 에너지 (백테스트 rolling48 의 마지막 창)
     - equal_window_initial: E[끝] = 창 시작 에너지 (equal_initial 정책)
+    - valued: 제약 대신 창 끝 잔량 1 MWh 에 value_krw_per_mwh 를 목적함수에 더한다 (소프트 종료).
+      평가액은 결과에 따로 적고 수익에 합산하지 않는다.
     """
 
     name: str = "none"
     final_energy_min_mwh: float | None = None
     final_energy_max_mwh: float | None = None
+    value_krw_per_mwh: float | None = None
 
     @classmethod
     def period_end_ge_initial(cls, energy_mwh: float) -> Terminal:
@@ -407,6 +424,10 @@ class Terminal:
     @classmethod
     def equal_window_initial(cls, energy_mwh: float) -> Terminal:
         return cls("equal_window_initial", float(energy_mwh), float(energy_mwh))
+
+    @classmethod
+    def valued(cls, value_krw_per_mwh: float) -> Terminal:
+        return cls("valued", None, None, float(value_krw_per_mwh))
 
 
 NO_TERMINAL = Terminal()
@@ -425,6 +446,7 @@ class WindowPlan:
     checks: list[dict[str, Any]]
     degradation: dict[str, Any]
     _ess: EssParams = field(repr=False, compare=False)
+    terminal_value_krw: float = 0.0  # 창 끝 잔량 평가액 (Terminal.valued 일 때만 > 0). 수익 아님
 
     @property
     def committed(self) -> pd.DataFrame:
@@ -484,6 +506,7 @@ class WindowPlan:
             **self.totals(committed_only=True),
             "mip_gap": self.mip_gap,
             "terminal_constraint": self.terminal.name,
+            "terminal_value_krw": self.terminal_value_krw,
         }
 
 
@@ -525,6 +548,7 @@ def plan_window(
         export_cap_mwh=export_cap,
         final_energy_max_mwh=terminal.final_energy_max_mwh,
         rec_krw_per_mwh=rec,
+        terminal_value_krw_per_mwh=terminal.value_krw_per_mwh,
         tol=tol,
     )
     hourly = data.copy()
@@ -541,6 +565,7 @@ def plan_window(
         checks=solved.checks,
         degradation=ess.degradation().metadata(),
         _ess=ess,
+        terminal_value_krw=solved.terminal_value_krw,
     )
 
 
