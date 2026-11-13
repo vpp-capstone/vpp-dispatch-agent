@@ -1,0 +1,7 @@
+# REC 수익 가정 v0 — 월별 제주 REC 현물 단가 버전. rec_v0.yaml 과 산식·가중치는 같고 단가만 월별 표를 쓴다.
+# 표 범위: 2024-06 ~ 2025-12. 2024-06~10 은 원자료가 없어 2024-11 값으로 임시 대체(표의 note 참고).
+# 표에 없는 달(예: 2026-01)을 포함하는 계획 창은 오류가 나므로, 그 기간은 rec_v0.yaml(단일 단가)을 쓴다.
+status: experiment_assumption_not_contract
+eligible_basis: sold_mwh_once
+weight: 1.0
+price_table: config/rec_price_monthly_v0.csv
