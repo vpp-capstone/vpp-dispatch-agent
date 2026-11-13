@@ -1,20 +1,20 @@
 month,price_krw_per_rec,source_url,note
-2024-06,,,실제 제주 REC 현물 월평균 단가로 채울 것 (비어 있으면 읽을 때 오류)
-2024-07,,,
-2024-08,,,
-2024-09,,,
-2024-10,,,
-2024-11,,,
-2024-12,,,
-2025-01,,,
-2025-02,,,
-2025-03,,,
-2025-04,,,
-2025-05,,,
-2025-06,,,
-2025-07,,,
-2025-08,,,
-2025-09,,,
-2025-10,,,
-2025-11,,,
-2025-12,,,
+2024-06,68709,https://blog.haezoom.com/smprec_202412month/,원자료 미확보(해줌 2024년 월간 글 접근 불가) → 2024-11 값으로 임시 대체한 가정값. 실제 값 확보 시 교체
+2024-07,68709,https://blog.haezoom.com/smprec_202412month/,원자료 미확보(해줌 2024년 월간 글 접근 불가) → 2024-11 값으로 임시 대체한 가정값. 실제 값 확보 시 교체
+2024-08,68709,https://blog.haezoom.com/smprec_202412month/,원자료 미확보(해줌 2024년 월간 글 접근 불가) → 2024-11 값으로 임시 대체한 가정값. 실제 값 확보 시 교체
+2024-09,68709,https://blog.haezoom.com/smprec_202412month/,원자료 미확보(해줌 2024년 월간 글 접근 불가) → 2024-11 값으로 임시 대체한 가정값. 실제 값 확보 시 교체
+2024-10,68709,https://blog.haezoom.com/smprec_202412month/,원자료 미확보(해줌 2024년 월간 글 접근 불가) → 2024-11 값으로 임시 대체한 가정값. 실제 값 확보 시 교체
+2024-11,68709,https://blog.haezoom.com/smprec_202412month/,"2024-12 글의 12월 제주 61,929원과 전월 대비 -6,780원으로 역산"
+2024-12,61929,https://blog.haezoom.com/smprec_202412month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-01,66786,https://blog.haezoom.com/smprec_202501month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-02,66426,https://blog.haezoom.com/smprec_202502month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-03,64464,https://blog.haezoom.com/smprec_202503month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-04,65581,https://blog.haezoom.com/smprec_202504month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-05,81899,https://blog.haezoom.com/smprec_202505month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-06,80265,https://blog.haezoom.com/smprec_202506month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-07,72536,https://blog.haezoom.com/smprec_202507month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-08,71031,https://blog.haezoom.com/smprec_202508month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-09,66230,https://blog.haezoom.com/smprec_202509month/,"본문 제주 평균 66,230원 (10월 글의 전월 대비 +2,603원 역산과 일치. 같은 글 요약부의 71,031원은 8월 값)"
+2025-10,68833,https://blog.haezoom.com/smprec_202510month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-11,65407,https://blog.haezoom.com/smprec_202511month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"
+2025-12,69890,https://blog.haezoom.com/smprec_202512month/,"해줌 월간 SMP·REC 동향, 제주 REC 현물 월평균"

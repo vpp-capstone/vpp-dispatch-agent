@@ -208,3 +208,13 @@ def test_terminal_constraint_cost_is_the_forgone_sale_of_initial_energy():
     assert plan.terminal_constraint_cost_krw == pytest.approx(100)
     free = run_rolling(frame([0] * 24, [100] * 24), ess, policy="free")
     assert free.terminal_constraint_cost_krw is None and free.objective_krw == pytest.approx(100)
+
+
+def test_shipped_monthly_table_covers_backtest_period():
+    """config/rec_v0_monthly.yaml 은 2024-06~2025-12 백테스트 기간의 모든 달 단가를 가진다."""
+    rec = RecParams.from_yaml("config/rec_v0_monthly.yaml")
+    meta = rec.metadata()["pricing"]
+    assert (meta["first_month"], meta["last_month"], meta["months"]) == ("2024-06", "2025-12", 19)
+    hours = pd.Series(pd.date_range("2024-06-01", "2025-12-31 23:00", freq="h"))
+    prices = rec.price_for(hours)
+    assert np.isfinite(prices).all() and (prices > 0).all()
