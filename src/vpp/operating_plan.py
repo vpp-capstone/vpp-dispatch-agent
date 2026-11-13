@@ -1,4 +1,4 @@
-"""담당: 최적화 — 계획일 D 의 ESS 운영계획 생성 (예측만으로 48시간을 풀고 D 24시간을 확정).
+"""담당: 최적화 - 계획일 D 의 ESS 운영계획 생성 (예측만으로 48시간을 풀고 D 24시간을 확정).
 
     python -m vpp.operating_plan --day 2024-06-05 [--ess config/ess_v0.yaml]
         [--degradation-config config/ess_v0_1.yaml] [--rec config/rec_v0.yaml]

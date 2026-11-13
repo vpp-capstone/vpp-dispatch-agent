@@ -24,15 +24,17 @@ python -m vpp.operator_pipeline
 
 | 공유 파일 | 두는 위치 | 담당 |
 |---|---|---|
-| `solar_*_predictions.parquet`, `wind_*_predictions.parquet` | `artifacts/predictions/` | 발전량 |
+| 2024 실측 포함 검증 파일 | `artifacts/2024_validation/` | 발전량 |
+| 2025 실측 없는 운영 예측 | `artifacts/2025/operational/` | 발전량 |
+| 2025 실측 포함 평가 파일 | `artifacts/2025/evaluation/` | 발전량 |
 | `smp_forecast.csv` (`smp_metrics.csv`, 비교용 `_b1`/`_actual`/`_18` 변형) | `data/processed/forecast/` | SMP |
 
 발전량 parquet 에 `improved_generation_kwh` 열이 있으면 그 열을, 없으면 `lightgbm_generation_kwh`
 열을 쓴다 (`forecast_inputs.normalize_generation_model`). 어느 열을 썼는지는 결과 묶음의
 `forecast_columns` 와 실행 상태 화면에 적힌다. SMP 파일의 모델 버전은 `trained_until` 열로 본다.
 
-설정의 `solar`/`wind` 가 가리키는 파일명이 바뀌면(예: 2025년 `*_ensemble_test_predictions.parquet`)
-`config/operator_pipeline.yaml` 의 경로를 그 파일명으로 바꾼다.
+설정의 `solar`/`wind` 가 가리키는 파일명이나 폴더가 바뀌면
+`config/operator_pipeline.yaml`의 해당 데이터 묶음 경로를 함께 바꾼다.
 
 ### 데이터 묶음 여러 개 (예: 2025 예측 + 2024 실측)
 
@@ -50,8 +52,13 @@ python -m vpp.operator_pipeline
 
 `python -m vpp.generation_forecast.export_evaluation_predictions`가 2024 검증 파일은
 `artifacts/2024_validation/`, 2025 평가 파일은 `artifacts/2025/evaluation/`에 만들고 SHA-256
-요약은 `artifacts/generation_evaluation_export_summary.json`에 기록한다. 실측 없는 2025 운영
+과 행 수 요약은 `artifacts/generation_evaluation_export_summary.json`에 기록한다. 실측 없는 2025 운영
 파일은 `artifacts/2025/operational/`에 둔다. parquet은 Git에 넣지 않고 Drive로 공유한다.
+
+현재 공유된 2024 검증 Parquet은 유효 실측 라벨이 없는 행을 제외한 상태다. 따라서 태양광은
+`2023-12-31`, `2024-12-31` 두 경계 계획일이 24시간만 있고, 풍력은 이 두 날을 포함해 총 29개
+계획일이 48시간·3개 단지의 완전한 행 수를 충족하지 않는다. 운영 파이프라인은 이 계획일을 보간하지
+않고 제외한다. 이 파일은 개발 검증용이며 완전한 연간 운영 입력으로 해석하지 않는다.
 
 ## 화면과 결과의 의미
 
@@ -69,8 +76,9 @@ python -m vpp.operator_pipeline
 
 모든 화면은 같은 검산 완료 묶음의 스냅샷을 사용한다. 실측이 있는 기간에는 화면의 '계획'이 **전날 실행
 종료 잔량에서 시작한 확정 계획**이고, 48시간 운영계획의 시작 잔량도 그 실행 종료 잔량이다
-(`start_soc_source=executed`). 실측이 없는 기간(현재 2025)은 계획상 잔량에서 시작하며 실행·정산은
-"미계산"으로 표시한다. 실행 수익은 `docs/execution_settlement.md` 의 실험용 정산 가정(하루전·편차 가격
+(`start_soc_source=executed`). 2025 운영 입력처럼 실측 열이 없는 데이터 묶음은 계획상 잔량에서
+시작하며 실행·정산은 "미계산"으로 표시한다. 실행 수익은 [실행·정산 가정](execution_settlement.md)의
+실험용 정산 가정(하루전·편차 가격
 = 실측 SMP, 배수 1·벌칙 0)으로 계산한 **가정 기반 실행 수익**이며 실제 정산이 아니다. REC 초기 저장분
 제외, 발전량 예측 정산금, 용량정산금은 포함되지 않는다.
 `generation_forecast.infer_improved` 는 발전량 담당이 학습 완료 모델로 예측 parquet 을 뽑을 때 쓰는
