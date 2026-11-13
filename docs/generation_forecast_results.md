@@ -8,8 +8,8 @@
 - 발전량 대상: 태양광 18개소, 풍력 3개 단지
 - 정답 시각(`valid_time_kst`) 기준 2023~2024년: 개발 전용. 시간순 폴드와 2024년 전체
   홀드아웃으로 피처·파라미터·앙상블을 선택한 뒤 운영 모델을 재학습
-- 2025년: 잠근 최종 테스트. 모델, 변수, 가중치 선택에 사용하지 않으며 현재 개선 모델로는
-  아직 다시 평가하지 않음
+- 2025년: 잠근 최종 테스트. 모델, 변수, 가중치 선택을 끝내고 운영 예측을 고정한 뒤 실측을
+  결합해 한 번 평가했으며, 이 결과를 보고 모델을 다시 조정하지 않음
 - 유효 정답: `label_is_valid == True`
 - 발전량 지연값은 입찰 시점 누수 위험 때문에 사용하지 않음
 
@@ -277,15 +277,17 @@ GFS 예보만 필요하며 2025년 AWS 실측은 필요하지 않다. 풍력 번
 P10/P50/P90을 출력한다. `generation_improved_production_summary.json`의
 `locked_2025_loaded`는 `false`다.
 
-아래 2025년 잠금 테스트 수치는 이 변경 전 벤치마크다. 변경된 풍력 모델은 ESS 수익
-시뮬레이션과 함께 최종 평가할 때까지 2025년 정답으로 다시 평가하지 않는다.
+운영 예측을 고정한 뒤 같은 예측값에 2025년 실측을 결합해 최종 평가했다. 포트폴리오 48시간
+전체 nMAE는 태양광 `3.941932%`, 풍력 `5.670580%`다. 태양광은 완전한 포트폴리오 시각
+17,520개를 평가했고, 풍력은 실측 결측 26행을 제외해 17,494개를 평가했다. 이 결과를 보고
+모델·피처·가중치를 다시 선택하지 않는다.
+
+아래 수치는 현재 최종 모델을 만들기 전 기본 모델·기본 앙상블의 참고 벤치마크다.
 
 ## 기존 기본 모델의 2025년 튜닝 전 잠금 테스트
 
 포트폴리오 48시간 전체의 nMAE다. 낮을수록 좋다. 아래 값은 현재 최종 모델의 성능이 아니라
-이번 2023~2024 개선 전에 기본 모델·기본 앙상블로 생성한 참고 벤치마크다. 개선 모델로
-2025년을 다시 실행하지 않았으며, 모델을 동결한 뒤 ESS 수익 시뮬레이션과 함께 한 번만
-평가한다.
+이번 2023~2024 개선 전에 기본 모델·기본 앙상블로 생성한 참고 벤치마크다.
 
 | 발전원 | 기준선 | LightGBM | HistGB | ExtraTrees | Weighted | Stacking |
 |---|---:|---:|---:|---:|---:|---:|
@@ -332,6 +334,15 @@ Stacking 계수는 2024년에서 고정한 뒤 기존 2025년 벤치마크에 �
   - `*_ensemble_validation_meta_fit_predictions.parquet`: 2024년 앙상블 적합 예측
   - `*_ensemble_test_predictions.parquet`: 개선 전 기본 앙상블의 2025년 참고 예측. 최신
     `*_improved_production.joblib`의 최종 예측이 아님
+- `artifacts/2024_validation/`
+  - `*_improved_2024_validation_with_actual.parquet`: 2023년 라벨로 재학습한 개발 검증 파일.
+    일부 계획일은 유효 실측 행이 빠져 48시간 창이 불완전하므로 운영 파이프라인에서 제외됨
+- `artifacts/2025/operational/`
+  - `*_improved_predictions.parquet`: 실측 열이 없는 고정 운영 예측
+- `artifacts/2025/evaluation/`
+  - `*_improved_2025_with_actual.parquet`: 고정 운영 예측에 2025년 실측만 결합한 최종 평가 파일
+- `artifacts/generation_evaluation_export_summary.json`
+  - 평가 파일별 행 수와 SHA-256. 기간과 nMAE는 이 문서에 기록
 - `data/processed/generation_forecast/`
   - `generation_model_metrics.csv`, `generation_asset_metrics.csv`, `training_summary.json`
   - `generation_ensemble_metrics.csv`, `generation_ensemble_asset_metrics.csv`

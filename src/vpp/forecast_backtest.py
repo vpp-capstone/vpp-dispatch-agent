@@ -1,4 +1,4 @@
-"""최적화 — 예측 기반 ESS 계획과 완전예측(실측) 계획을 같은 조건으로 돌려 비교하는 CLI.
+"""최적화 - 예측 기반 ESS 계획과 완전예측(실측) 계획을 같은 조건으로 돌려 비교하는 CLI.
 
     python -m vpp.forecast_backtest --start 2024-06-05 --end 2024-06-11 \
         [--solar <parquet>] [--wind <parquet>] [--smp <csv>] [--ess config/ess_v0.yaml] \
@@ -555,7 +555,7 @@ def main(argv: list[str] | None = None) -> None:
     print(json.dumps(head, ensure_ascii=False, indent=2, default=_json_default))
     for w in validation.get("comparison_warnings", []):
         if w["flagged"]:
-            print(f"⚠️ 확인 필요: {w['item']} — {w['note']}")
+            print(f"⚠️ 확인 필요: {w['item']} - {w['note']}")
     failed = [c for c in validation["comparison_checks"] if not c["passed"]]
     if not validation["plan_checks_all_passed"]:
         failed.append({"item": "plan_checks_all_passed", "passed": False})

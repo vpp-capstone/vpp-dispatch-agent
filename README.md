@@ -5,8 +5,8 @@
 그 예측으로 ESS 충·방전 계획을 세운 뒤 실측으로 결과를 평가한다.
 
 - 발전량: 한수원 태양광 18개소 + 풍력 3개 단지(성산·한경·상명)의 가상 포트폴리오. 제주 전체가 아니다.
-- 현재 단계: 발전량·SMP 예측을 ESS v0에 연결해 **예측 기반 계획과 실측 기반(완전예측) 계획을 비교**하는 중.
-  실측에 따른 실행 조정·정산은 다음 단계.
+- 현재 단계: 발전량·SMP 예측을 ESS v0에 연결해 계획을 만들고, 확정 판매계획을 유지한 채
+  실측 발전량에 맞춘 ESS 실행 운전과 실험 가정 기반 정산까지 비교한다.
 - 초기 기획의 **24시간 수요예측**(`data.py`, `forecast.py`)은 자리만 있고 구현되지 않았다. 유지 여부는 팀 합의 필요.
 
 ## 모듈 현황
@@ -15,12 +15,12 @@
 | ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | 시장·수요 수집         | `vpp.market`                                                                           | 구현 (PR #1)                                                                  | [data_contract.md](docs/data_contract.md)                                                         |
 | 재생에너지 Target 정제 | `renewable_targets.py`, `build_renewable_history.py`                                   | 구현 (PR #2)                                                                  | [renewable_history.md](docs/renewable_history.md)                                                 |
-| ESS 운영계획 v0        | `optimization.py`, `backtest.py`, `portfolio_data.py`, `validation.py`, `baselines.py` | 구현 (PR #3). 실측을 넣는 완전예측 백테스트. 예측 연결 진행 중                | [formulation.md](docs/formulation.md)                                                             |
+| ESS 운영계획 v0        | `optimization.py`, `forecast_backtest.py`, `operating_plan.py`, `validation.py`       | 구현. 예측 기반 롤링 계획·완전예측 비교·SOC 이월·실행 운전 연결               | [formulation.md](docs/formulation.md)                                                             |
 | 발전량 예측 48h        | `generation_forecast/`                                                                 | 구현. 2023 학습·2024 결합 학습·2025 최종 테스트, LightGBM 및 앙상블 지원      | [설계](<docs/generation_forecast_design(11-03).md>) · [결과](docs/generation_forecast_results.md) |
 | SMP 예측 48h           | `smp_forecast.py`                                                                      | 구현 (PR #5)                                                                  | [smp_forecast.md](docs/smp_forecast.md)                                                           |
 | 수요예측 24h           | `data.py`, `forecast.py`                                                               | 미구현 (`NotImplementedError` 자리만)                                         | —                                                                                                 |
-| 평가·정산              | `evaluation.py` — `evaluate_cost`, `evaluate_forecast`                                 | 미구현. 예측 기반 계획을 실측에 적용한 손익 (다음 단계)                       | —                                                                                                 |
-| 파이프라인·API·화면    | `pipeline.py`, `api/main.py`, `dashboard/app.py`                                       | 뼈대. 대시보드의 ESS 화면만 동작                                              | —                                                                                                 |
+| 실행·정산              | `execution.py`, `execution_rolling.py`, `settlement.py`                                | 구현. 판매계획 고정 실행 운전과 실험 가정 기반 편차 정산                     | [실행·정산](docs/execution_settlement.md) · [대시보드](docs/operator_dashboard.md)                 |
+| 파이프라인·API·화면    | `operator_pipeline.py`, `dashboard/app.py`, `pipeline.py`, `api/main.py`                | 운영 파이프라인·대시보드는 구현. 범용 `pipeline.py`와 day-ahead API는 뼈대    | [operator_dashboard.md](docs/operator_dashboard.md)                                               |
 | 공통 타입              | `schemas.py`                                                                           | 초안. 최적화·평가 타입은 `status`, `reason`만 있는 빈 틀                      | —                                                                                                 |
 
 - 공통 타입·함수 인자·데이터 형식은 바꾸기 전에 쓰는 사람과 합의.
@@ -30,19 +30,20 @@
 
 ```text
 vpp.market ──► data/processed/market/ ──► vpp.smp_forecast ──► SMP 예측 48h ─┐
-                                                                             ├─► ESS 계획 (solve_window) ─► 평가·정산 (미구현)
-data/raw/generation/ ─► vpp.generation_forecast ─► 발전량 예측 48h ───────────┘
-         └──────────────── 실측 발전량·SMP (비교·평가용) ─────────────────────┘
+                                                                             ├─► ESS 계획 ─► 실행 운전·가정 정산
+data/raw/generation/ ─► vpp.generation_forecast ─► 발전량 예측 48h ───────────┘                 ▲
+         └──────────────── 실측 발전량·SMP (비교·평가용) ──────────────────────────────────────┘
 ```
 
 1. 시장 수집 → SMP 예측, 발전량 원본 + GFS → 발전량 예측 (각자 독립 실행)
 2. 같은 계획일 D의 두 예측 48시간을 ESS에 넣어 앞 24시간 계획 확정, SOC 이월
-3. 같은 기간 실측 기반 계획과 비교 (현재 단계)
-4. 확정 계획을 실측에 적용한 정산·손익 평가 (다음 단계)
+3. 같은 기간 실측 기반 완전예측 계획과 비교
+4. 확정 판매계획을 실측에 적용해 ESS 실행 운전·편차 정산·실현 수익 계산
 
 ## 데이터 준비 (설치 전에)
 
-Git에 들어 있는 데이터는 `data/reference/`와 `data/sample/`뿐이다. 나머지는 팀 Drive에서 받아
+Git에는 `data/reference/`, `data/sample/`과 근거 보존용 열화·용량정산 자료 일부만 들어 있다.
+발전량·기상·시장 원본과 예측 산출물은 팀 Drive에서 받아
 아래 위치에 **파일명 그대로** 둔다. 전부 `.gitignore` 대상이라 커밋되지 않는다.
 
 **1. 발전량 원본 CSV 4개 → `data/raw/generation/`** (ESS 백테스트·발전량 예측 공용, 필수)
@@ -102,9 +103,14 @@ python -m vpp.generation_forecast.export_evaluation_predictions  # 2024·2025 �
 pytest                                       # PR 전에 한 번
 ```
 
-평가 파일 생성 명령은 2024년 예측을 만들 때 2023년 라벨만 사용해 선택된 모델 구조를 다시 학습하므로 검증 연도 누수를 막는다.
+평가 파일 생성 명령은 2024년 예측을 만들 때 2023년 라벨만 사용해 선택된 모델 구조를 다시 학습한다.
+다만 구조와 하이퍼파라미터 선택에는 2024년 개발 결과가 사용됐으므로 독립 최종 시험으로 해석하지 않는다.
 2025년 평가 파일은 기존 운영용 예측값을 다시 계산하지 않고 그대로 유지한 채 실측 열만 결합하며,
-`artifacts/generation_evaluation_export_summary.json`에 행 수·기간·평가지표·SHA-256을 기록한다.
+`artifacts/generation_evaluation_export_summary.json`에는 파일별 행 수와 SHA-256을 기록한다.
+
+현재 공유된 2024 검증 파일은 유효 실측 라벨이 없는 행을 내보내지 않아 일부 계획일의 48시간 창이
+불완전하다. 태양광은 경계 계획일 2일, 풍력은 29일이 불완전하며 운영 파이프라인은 이를 보간하지 않고
+제외한다. 기존 Parquet은 재생성하지 않고 개발 검증 자료로만 사용한다.
 
 ESS 계산 CLI 3개(`vpp.operating_plan` 운영계획, `vpp.forecast_backtest` 예측 vs 완전예측 비교,
 `vpp.backtest` 실측 백테스트)는 공통 옵션 `--ess config/ess_v0.yaml`,
@@ -198,6 +204,7 @@ config/
 docs/
   data_contract.md           데이터 소스·시간·단위·전달 형식
   formulation.md             ESS 제약·비용 정의
+  execution_settlement.md    확정 판매계획 실행 운전·실험용 정산 가정
   generation_asset_validation.md  발전소 21개소 데이터 점검 결과
   generation_forecast_design(11-03).md  발전량 예측 설계
   GITHUB_REPO_HANDOFF.md      발전량 예측 코드 이전 인수인계
