@@ -10,7 +10,8 @@
     - KPX 하루전 수요예측(fcst_jeju): 공표 시각 미확인 → 기본 제외 (`use_fcst=True`로만 사용)
     - 기상 지표(발전량 담당 제공): `available_at <= 발행 시각`인 예보 중 가장 최근 것만 사용
 
-모델: 내일·모레 각각 LightGBM(L1 손실) 회귀 + 0원 이하 확률 분류기.
+모델: 내일·모레 각각 LightGBM(L1 손실) 회귀 + 분위수(p10·p90) 회귀 + 0원 이하·음수 확률 분류기.
+음수 확률(p_neg)은 REC 를 받는 발전기의 판매 판단(SMP + REC < 0 이면 판매 손해)에 쓴다.
 매달 1일 발행분부터 그 시점에 정답이 확정된 자료로 다시 학습한다 (2024년 검증으로 정한 방식).
 비교 기준 B1: 발행일에 알고 있는 마지막 날(I)의 같은 시간 가격.
 
@@ -64,6 +65,8 @@ CLF_PARAMS = dict(
     learning_rate=0.03, num_leaves=15, min_child_samples=20, subsample=0.8, subsample_freq=1,
     colsample_bytree=0.8, n_estimators=300, verbose=-1, random_state=0,
 )  # fmt: skip
+QUANTILES = (0.1, 0.9)  # 불확실성 구간 smp_p10·smp_p90. 중앙(p50)은 L1 회귀인 smp_hat 이 맡는다
+MIN_POSITIVES = 5  # 학습 기간의 해당 사건(0원 이하·음수)이 이보다 적으면 분류기 대신 그 비율을 쓴다
 
 WEATHER_META = {"issued_at", "available_at", "target_ts", "lead_hours"}
 WEATHER_QC_WORDS = ("coverage", "capacity", "quality", "reliab", "confidence", "신뢰", "커버")
@@ -253,6 +256,19 @@ def months_between(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]
     return list(pd.date_range(start.to_period("M").to_timestamp(), end, freq="MS"))
 
 
+def event_probability(x: pd.DataFrame, event: pd.Series, x_test: pd.DataFrame) -> np.ndarray:
+    """사건(0원 이하, 음수 등) 확률. 학습 기간에 사건이 MIN_POSITIVES 번보다 적으면 그 비율을 그대로 쓴다.
+
+    음수 SMP 는 2024년부터 나타나서, 그 전 달 모델에는 사건이 없거나 몇 번뿐이다.
+    """
+    event = event.astype(int)
+    n_pos = int(event.sum())
+    if n_pos < MIN_POSITIVES or n_pos == len(event):
+        return np.full(len(x_test), n_pos / max(len(event), 1))
+    clf = lgb.LGBMClassifier(**CLF_PARAMS).fit(x, event)
+    return clf.predict_proba(x_test)[:, 1]
+
+
 def walk_forward(
     samples: pd.DataFrame, start: str, end: str, features: list[str], train_start: str = TRAIN_START
 ) -> pd.DataFrame:
@@ -277,10 +293,18 @@ def walk_forward(
                 continue
             train = pool[(pool["horizon"] == h) & (pool["target_date"] <= month)]
             train = train.dropna(subset=["y", "p_last", "p_week"])
-            reg = lgb.LGBMRegressor(**REG_PARAMS).fit(train[features], train["y"])
-            clf = lgb.LGBMClassifier(**CLF_PARAMS).fit(
-                train[features], (train["y"] <= 0).astype(int)
-            )
+            x, y = train[features], train["y"]
+            reg = lgb.LGBMRegressor(**REG_PARAMS).fit(x, y)
+            hat = np.asarray(reg.predict(test[features]), dtype=float)
+            q = {
+                a: np.asarray(
+                    lgb.LGBMRegressor(**{**REG_PARAMS, "objective": "quantile", "alpha": a})
+                    .fit(x, y)
+                    .predict(test[features]),
+                    dtype=float,
+                )
+                for a in QUANTILES
+            }
             outputs.append(
                 pd.DataFrame(
                     {
@@ -288,8 +312,12 @@ def walk_forward(
                         "issued_at": test["issue_ts"],
                         "horizon": h,
                         "target_ts": test["target_ts"],
-                        "smp_pred": reg.predict(test[features]),
-                        "p_low": clf.predict_proba(test[features])[:, 1],
+                        "smp_pred": hat,
+                        # 따로 학습한 분위수가 서로·중앙값과 엇갈리지 않게 정리 (p10 <= hat <= p90)
+                        "smp_p10": np.minimum.reduce([q[0.1], q[0.9], hat]),
+                        "smp_p90": np.maximum.reduce([q[0.1], q[0.9], hat]),
+                        "p_low": event_probability(x, y <= 0, test[features]),
+                        "p_neg": event_probability(x, y < 0, test[features]),
                         "smp_b1": test["p_last"],
                         "smp_actual": test["y"],
                         "trained_until": month,
@@ -324,12 +352,23 @@ def metrics(pred: pd.DataFrame, start: str | None = None, end: str | None = None
                 "RMSE": round(float(np.sqrt(((p[ok] - y[ok]) ** 2).mean())), 2),
                 "MAE_0원이하제외": round(err[~low[ok]].mean(), 2),
             })  # fmt: skip
-        hit = (g["p_low"] >= 0.5) & low
-        false = (g["p_low"] >= 0.5) & ~low
-        rows.append({
-            "대상": "내일" if h == 1 else "모레", "연도": year, "방법": "저가경보(p>=0.5)",
-            "시간수": int(low.sum()), "적중": int(hit.sum()), "헛경보": int(false.sum()),
-        })  # fmt: skip
+        target = "내일" if h == 1 else "모레"
+        for name, prob, event in (("저가경보(p_low>=0.5)", g["p_low"], low),
+                                  ("음수경보(p_neg>=0.5)", g.get("p_neg"), y < 0)):  # fmt: skip
+            if prob is None:
+                continue
+            alarm = prob >= 0.5
+            rows.append({
+                "대상": target, "연도": year, "방법": name, "시간수": int(event.sum()),
+                "적중": int((alarm & event).sum()), "헛경보": int((alarm & ~event).sum()),
+            })  # fmt: skip
+        if {"smp_p10", "smp_p90"} <= set(g.columns):
+            inside = (y >= g["smp_p10"]) & (y <= g["smp_p90"])
+            rows.append({
+                "대상": target, "연도": year, "방법": "p10~p90 구간", "시간수": len(g),
+                "포함률": round(inside.mean() * 100, 1),
+                "평균폭": round(float((g["smp_p90"] - g["smp_p10"]).mean()), 2),
+            })  # fmt: skip
     return pd.DataFrame(rows)
 
 
@@ -349,11 +388,18 @@ def to_output(pred: pd.DataFrame) -> pd.DataFrame:
     out["issue_date"] = out["issue_date"].dt.date
     out["trained_until"] = out["trained_until"].dt.date
     out["smp_hat_krw_per_mwh"] = out["smp_hat"] * 1000.0
+    for c in ("smp_p10", "smp_p90"):
+        out[f"{c}_krw_per_mwh"] = out[c] * 1000.0
     cols = [
         "issue_date", "issue_time", "horizon", "lead_hour", "target_time", "smp_hat",
-        "smp_hat_krw_per_mwh", "p_low", "smp_b1", "smp_actual", "trained_until", "train_rows",
+        "smp_hat_krw_per_mwh", "smp_p10", "smp_p90", "smp_p10_krw_per_mwh",
+        "smp_p90_krw_per_mwh", "p_low", "p_neg", "smp_b1", "smp_actual", "trained_until",
+        "train_rows",
     ]  # fmt: skip
-    return out[cols].round({"smp_hat": 3, "smp_hat_krw_per_mwh": 1, "p_low": 4})
+    return out[cols].round({
+        "smp_hat": 3, "smp_hat_krw_per_mwh": 1, "smp_p10": 3, "smp_p90": 3,
+        "smp_p10_krw_per_mwh": 1, "smp_p90_krw_per_mwh": 1, "p_low": 4, "p_neg": 4,
+    })  # fmt: skip
 
 
 PRICE_SOURCES = ("model", "b1", "actual")
@@ -372,6 +418,11 @@ def price_variant(forecast: pd.DataFrame, source: str) -> pd.DataFrame:
     if source != "model":
         out["smp_hat"] = out["smp_b1" if source == "b1" else "smp_actual"]
         out["smp_hat_krw_per_mwh"] = (out["smp_hat"] * 1000.0).round(1)
+        # 분위수 구간도 같은 가격 한 점으로 (비교용 입력에 모델의 불확실성이 섞이지 않게)
+        for c in ("smp_p10", "smp_p90"):
+            if c in out.columns:
+                out[c] = out["smp_hat"]
+                out[f"{c}_krw_per_mwh"] = out["smp_hat_krw_per_mwh"]
     out["price_source"] = source
     return out
 
@@ -397,7 +448,8 @@ def published_rows(hourly: pd.DataFrame, pred: pd.DataFrame) -> pd.DataFrame:
         p = price.reindex(ts).to_numpy()
         rows.append(pd.DataFrame({
             "issue_date": r.issue_date, "issued_at": r.issued_at, "horizon": 1, "target_ts": ts,
-            "smp_pred": p, "p_low": (p <= 0).astype(float), "smp_b1": p, "smp_actual": p,
+            "smp_pred": p, "smp_p10": p, "smp_p90": p, "p_low": (p <= 0).astype(float),
+            "p_neg": (p < 0).astype(float), "smp_b1": p, "smp_actual": p,
             "trained_until": r.trained_until, "train_rows": r.train_rows,
         }))  # fmt: skip
     return pd.concat(rows, ignore_index=True)
