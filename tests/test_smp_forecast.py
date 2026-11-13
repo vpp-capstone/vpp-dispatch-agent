@@ -129,9 +129,32 @@ def test_walk_forward_trains_only_on_published_targets(monkeypatch):
     # 각 달 모델은 그 달 1일까지 공표된 정답으로만 학습한다
     assert (pred["trained_until"] == pred["issue_date"].dt.to_period("M").dt.to_timestamp()).all()
     months = sorted(pred["trained_until"].unique())
-    assert len(seen) == len(months) * 2 * 2  # 달 x 내일·모레 x (회귀·분류)
+    # 달 x 내일·모레 x (회귀 + 분위수 2개). 이 자료엔 0원 이하가 1시간뿐이라 분류기는 학습하지 않는다
+    assert len(seen) == len(months) * 2 * 3
     for i, month in enumerate(months):
-        assert all(t <= month for t in seen[i * 4 : i * 4 + 4])
+        assert all(t <= month for t in seen[i * 6 : i * 6 + 6])
+    assert (pred["p_low"] < 0.01).all() and (pred["p_neg"] == 0).all()  # 사건 비율로 대체
+
+
+def test_event_probability_falls_back_to_rate_when_events_are_rare():
+    x = pd.DataFrame({"a": range(100)})
+    rare = pd.Series([1] * 3 + [0] * 97)
+    assert (sf.event_probability(x, rare, x.head(5)) == 0.03).all()
+    common = pd.Series([1] * 30 + [0] * 70)
+    p = sf.event_probability(x, common, x)
+    assert p.shape == (100,) and p[:30].mean() > p[30:].mean()  # 분류기가 사건 쪽에 높은 확률
+
+
+def test_quantile_band_brackets_point_forecast():
+    s = sf.build_samples(make_hourly(days=60), horizons=(1, 2))
+    out = sf.to_output(
+        sf.walk_forward(s, "2024-02-10", "2024-02-20", sf.BASE_FEATURES, train_start="2024-01-01")
+    )
+    assert (out["smp_p10"] <= out["smp_hat"] + 1e-9).all()
+    assert (out["smp_hat"] <= out["smp_p90"] + 1e-9).all()
+    assert ((out["smp_p90_krw_per_mwh"] - out["smp_p90"] * 1000).abs() <= 0.5).all()
+    for c in ("p_low", "p_neg"):
+        assert out[c].between(0, 1).all()
 
 
 def test_window_for_issue_gives_48_hours_for_optimizer():
@@ -204,6 +227,8 @@ def test_forecast_at_18_fills_tomorrow_with_published_price():
         assert g["lead_hour"].tolist() == list(range(6, 54))
     tomorrow = out[out["horizon"] == 1]
     assert (tomorrow["smp_hat"] == tomorrow["smp_actual"]).all()
+    assert (tomorrow["smp_p10"] == tomorrow["smp_actual"]).all()  # 공표된 가격은 불확실성 없음
+    assert (tomorrow["smp_p90"] == tomorrow["smp_actual"]).all()
     assert (out["issue_time"].dt.hour == 18).all()
 
 
@@ -215,6 +240,7 @@ def test_price_variants_only_swap_the_price():
     assert (b1["smp_hat"] == out["smp_b1"]).all()
     assert (actual["smp_hat"] == out["smp_actual"]).all()
     assert (actual["smp_hat_krw_per_mwh"] == out["smp_actual"] * 1000).all()
+    assert (actual["smp_p10"] == actual["smp_hat"]).all() and (b1["smp_p90"] == b1["smp_hat"]).all()
     keep = ["issue_date", "target_time", "lead_hour", "smp_actual"]
     assert b1[keep].equals(out[keep])
     with pytest.raises(ValueError):
