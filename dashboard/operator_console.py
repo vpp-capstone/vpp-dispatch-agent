@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from dashboard.distribution_view import render as render_distribution
 from dashboard.operator_simulation import render_simulator, replay_payload
 from dashboard.overview_data import load_experiment
 from dashboard.signal_replay import render_signal
@@ -745,7 +746,7 @@ def render():
         release = releases[choice]
     elif order:
         release = releases[order[0]]
-    screens = ["요약", "운영계획", "예측 입력", "예상 수익", "실적·정산", "실행 상태"]
+    screens = ["요약", "배전망 ESS", "운영계획", "예측 입력", "예상 수익", "실적·정산", "실행 상태"]
     legacy_screens = {"운영 관제": "요약", "2 운영계획·입찰안": "운영계획",
                       "1 예측 입력": "예측 입력", "3 예상 수익": "예상 수익",
                       "4 실적·정산": "실적·정산"}
@@ -759,6 +760,9 @@ def render():
         label_visibility="collapsed",
         key="operator_screen",
     )
+    if nav == "배전망 ESS":
+        render_distribution(ROOT)
+        return
     if state.get("state") in ("running", "queued"):
         st.info("새 코드·입력으로 실행 중입니다. 완료 전까지 아래는 이전 검산 완료 결과입니다.")
     if state.get("state") in ("needs_data", "failed"):
