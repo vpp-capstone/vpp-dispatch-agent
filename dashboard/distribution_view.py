@@ -12,9 +12,10 @@ from dashboard.distribution_display import (
     BATTERIES, OPERATING, REPORT, RESULTS, SIZING, line_label, load_display,
     selected_id, visible_candidates,
 )
+from dashboard.distribution_operation import render_replay, revenue_breakdown
 
 CSS = Path(__file__).parent / "assets/distribution_view.css"
-STEPS = ("선로 조건", "설비 비교", "참여 판단")
+STEPS = ("선로 조건", "설비 비교", "참여 판단", "운영과 수익")
 DEFAULTS = {"de_step": 0, "de_kind": "cap", "de_line": "cap_2.50MW",
             "de_battery": "all", "de_size": "all", "de_chosen": None}
 
@@ -47,7 +48,7 @@ def _choice(label, options, field, format_func=str):
 
 
 def _heading(step, title, description):
-    st.markdown(f'<div class="de-heading"><span>STEP {step:02d} / 03</span>'
+    st.markdown(f'<div class="de-heading"><span>STEP {step:02d} / {len(STEPS):02d}</span>'
                 f'<h2>{escape(title)}</h2><p>{escape(description)}</p></div>',
                 unsafe_allow_html=True)
 
@@ -74,7 +75,7 @@ def _line_screen(rows):
                        lambda k: "낮 시간 고정 상한" if k == "cap" else "발전량에 따른 동적 상한")
         lines = sorted(rows.loc[rows.line_case.str.startswith(kind + "_"), "line_case"].unique())
         line = _choice("선로 여유", lines, "de_line", line_label)
-        _facts([("모집 태양광", "5.7 MW"), ("결과 기준", "2025 제주 · SMP 예측 운전"),
+        _facts([("모집 태양광", "5.7 MW"), ("결과 기준", "2025 제주 · 발전량 예측 → 실행 → 정산"),
                 ("참여 판단 관점", "표준 수익 배분 · VPP")])
     with right:
         st.markdown("#### 이 선로의 운전 조건")
@@ -159,7 +160,9 @@ def _decision_screen(rows):
                 f'<h3>{verdict}</h3><p>{detail}</p></div>', unsafe_allow_html=True)
     _metrics([("20년 NPV", _money(row.npv_krw), "투자·지원·유지·교체비 반영 · 보고값"),
               ("ESS 방전 매출 / 년", _money(row.ess_discharge_revenue_krw), "비용 차감 전 · 운영 CSV"),
-              ("추가 연간 보상 필요액", _money(row.needed_annual_support_krw, digits=2), "NPV 0 기준 · 보고값이 있을 때만")])
+              ("추가 연간 보상 필요액",
+               "필요 없음" if positive else _money(row.needed_annual_support_krw, digits=2),
+               "NPV가 양수라 보상 없이도 흑자" if positive else "NPV 0 기준 · 보고값이 있을 때만")])
     left, right = st.columns(2, gap="large")
     with left:
         st.markdown("#### 저장된 운전 결과")
@@ -172,7 +175,7 @@ def _decision_screen(rows):
         _facts([("대상 선로·허용범위", "실제 한전 자료 확인 필요"),
                 ("설비 비용", "국내 견적·보증 조건 확인 필요"),
                 ("정산·배분", "계약상 귀속 조건 확인 필요"),
-                ("예측 오차·페널티", "이 결과에는 발전량 예측 오차 미반영")])
+                ("예측 오차·페널티", "1시간 근사로 반영 · 15분 정산 확인 필요")])
     peers = rows[(rows.battery == row.battery) & (rows.ess_power_mw == row.ess_power_mw)
                  & (rows.ess_energy_mwh == row.ess_energy_mwh)].sort_values("line_case")
     with st.expander("같은 설비를 다른 선로에서도 비교"):
@@ -180,11 +183,94 @@ def _decision_screen(rows):
                                    "ESS 방전 매출 / 년": peers.ess_discharge_revenue_krw.map(_money),
                                    "20년 NPV · 보고값": peers.npv_krw.map(_money)}),
                      hide_index=True, width="stretch")
-    st.caption("경제성 기준의 검토 결과이며 실제 사업 참여 승인 여부는 아닙니다. "
-               "선택한 배전망 설비의 시간별 운전 원본은 현재 운영계획 화면과 연결되지 않았습니다.")
-    back, restart = st.columns(2)
+    st.caption("경제성 기준의 검토 결과이며 실제 사업 참여 승인 여부는 아닙니다.")
+    back, forward = st.columns(2)
     back.button("← 다른 설비 비교", on_click=_go, args=(1,))
-    restart.button("선로 조건 다시 선택", on_click=_go, args=(0,))
+    forward.button("운영 방식과 수익 보기 →", key="de_operation_next", type="primary",
+                   on_click=_go, args=(3,))
+
+
+def _operation_screen(rows, root):
+    candidates = visible_candidates(rows, st.session_state.de_line,
+                                    st.session_state.de_battery, st.session_state.de_size)
+    chosen = selected_id(candidates, st.session_state.de_chosen)
+    st.session_state.de_chosen = chosen
+    if chosen is None:
+        st.info("현재 조건의 저장 결과가 없습니다. 설비 비교에서 다른 조합을 선택하세요.")
+        st.button("← 설비 비교", on_click=_go, args=(1,))
+        return
+    row = candidates[candidates.id == chosen].iloc[0]
+    _heading(4, "어떻게 운영하고, 얼마를 벌까요?", row.equipment + " · " + line_label(row.line_case))
+    try:
+        income = revenue_breakdown(row)
+    except ValueError as exc:
+        st.info(str(exc))
+        return
+    known = pd.notna(row.npv_krw)
+    positive = known and row.npv_krw > 0
+    _metrics([("VPP 귀속 수입 / 년", _money(income["total"], digits=2),
+               "페널티 반영 · 투자·유지·교체비 차감 전"),
+              ("20년 NPV", _money(row.npv_krw), "투자·지원·유지·교체비 반영 · 보고값"),
+              ("추가 연간 보상 필요액", "필요 없음" if positive else
+               _money(row.needed_annual_support_krw, digits=2),
+               "NPV가 양수라 보상 없이도 흑자" if positive else "NPV 0 기준 · 보고값이 있을 때만")])
+
+    render_replay(root, row)
+
+    st.markdown("#### 1년 수입은 이렇게 구성됩니다")
+    terms = (("+", "ESS 방전 정산 수입", income["ess"], "VPP 몫 100% · SMP·REC·편차 정산 반영"),
+             ("+", "태양광 용량정산금", income["solar_cp"], "전체 태양광 용량정산금 중 VPP 몫 50%"),
+             ("−", "임밸런스 페널티", -income["penalty"], "VPP 부담 100% · 허용오차 초과분"))
+    st.markdown('<div class="de-revenue">' + ''.join(
+        f'<div><span class="de-sign">{sign}</span><span>{label}</span>'
+        f'<strong>{_money(value, digits=2)}</strong><small>{note}</small></div>'
+        for sign, label, value, note in terms
+    ) + f'</div><div class="de-revenue-total"><span>연간 VPP 귀속 수입</span>'
+        f'<strong>{_money(income["total"], digits=2)}</strong></div>', unsafe_allow_html=True)
+    st.caption("태양광 직접 판매 수입은 발전사업자 몫이며, ESS 용량정산금은 이번 기준에서 제외합니다. "
+               "표시 금액은 각각 반올림되어 합계에 차이가 보일 수 있습니다.")
+
+    if not known:
+        interpretation = "연간 수입은 확인되지만 이 조합의 NPV 보고값은 없습니다. 투자 경제성 판단은 보류합니다."
+    elif positive:
+        interpretation = (f"연간 VPP 수입은 {_money(income['total'], digits=2)}이며, "
+                          f"투자·유지·교체비를 반영한 20년 NPV는 {_money(row.npv_krw)}입니다.")
+    else:
+        interpretation = (f"연간 VPP 수입이 {_money(income['total'], digits=2)}여도 "
+                          f"투자·유지·교체비를 반영한 20년 NPV는 {_money(row.npv_krw)}입니다. "
+                          "설비 비용·용량 또는 추가 보상 조건을 함께 검토해야 합니다.")
+    st.markdown(f'<div class="de-note"><strong>수입과 사업성은 함께 보세요</strong><br>'
+                f'{escape(interpretation)}</div>', unsafe_allow_html=True)
+
+    with st.expander("정산 내역과 집계 기준"):
+        amounts = pd.DataFrame({
+            "항목": ["ESS 방전 정산 수입 · 100%", "태양광 용량정산금 · 50%", "임밸런스 페널티 · 차감", "VPP 귀속 수입 합계"],
+            "연간 금액 (원)": [income["ess"], income["solar_cp"], income["penalty"], income["total"]],
+        })
+        st.dataframe(amounts, hide_index=True, width="stretch")
+        _facts([("연간 충전량", f"{row.ess_charge_mwh:,.1f} MWh"),
+                ("연간 방전량", f"{row.ess_discharge_mwh:,.1f} MWh"),
+                ("결과 기간", f"{row.days:g}일"),
+                ("수입 기준", "forecast_exec / standard · ESS 용량정산금 제외")])
+        st.caption("실시간 편차 정산은 ESS·태양광 정산 수입에 이미 포함되어 있어 다시 차감하지 않습니다. "
+                   "연간 VPP 수입은 설비 비용 차감 전이며 순이익·투자 회수액이 아닙니다.")
+        st.caption(f"운영 수치: {row.source_file} · NPV: "
+                   + (row.npv_source if known else "해당 조합의 보고값 없음"))
+
+    with st.expander("같은 선로의 설비별 수입 비교"):
+        peers = visible_candidates(rows, row.line_case)
+        peer_income = peers.apply(lambda r: revenue_breakdown(r)["total"], axis=1)
+        st.dataframe(pd.DataFrame({
+            "검토": ["선택" if key == row.id else "" for key in peers.id],
+            "배터리 / 용량": peers.equipment,
+            "VPP 귀속 수입 / 년": peer_income.map(lambda v: _money(v, digits=2)),
+            "20년 NPV · 보고값": peers.npv_krw.map(_money),
+        }), hide_index=True, width="stretch")
+    st.caption("시간별 재생과 연간 수입은 같은 설비·forecast_exec / standard 기준입니다. "
+               "NPV는 기존 보고값을 표시합니다.")
+    back, compare = st.columns(2)
+    back.button("← 참여 판단", key="de_operation_back", on_click=_go, args=(2,))
+    compare.button("다른 설비와 비교하기", key="de_operation_compare", on_click=_go, args=(1,))
 
 
 def render(root: Path):
@@ -199,7 +285,7 @@ def render(root: Path):
     with st.container(key="distribution_ess_view"):
         st.markdown("### 배전망 ESS 참여 검토")
         st.caption("2026-11-15 저장 결과 · 제주 시장을 사용한 시연 · 실제 대상 선로의 승인 결과 아님")
-        for i, column in enumerate(st.columns(3)):
+        for i, column in enumerate(st.columns(len(STEPS))):
             column.button(f"{i + 1}  {STEPS[i]}", key=f"de_nav_{i}", width="stretch",
                           type="primary" if st.session_state.de_step == i else "secondary",
                           on_click=_go, args=(i,))
@@ -211,10 +297,14 @@ def render(root: Path):
                     '<span>태양광 5.7 MW</span><span>기준 · 연 0%</span>'
                     '<span>ESS 용량정산금 제외</span><span>표준 수익 배분</span></div>',
                     unsafe_allow_html=True)
-        (_line_screen, _equipment_screen, _decision_screen)[st.session_state.de_step](rows)
+        if st.session_state.de_step == 3:
+            _operation_screen(rows, root)
+        else:
+            (_line_screen, _equipment_screen, _decision_screen)[st.session_state.de_step](rows)
         with st.expander("조회 기준과 원본 결과"):
             st.write("운영 수치는 기존 CSV, NPV와 보상 필요액은 기존 결과 보고서의 표를 표시합니다. "
-                     "사업성은 기준 시나리오·SMP 예측 운전·표준 수익 배분·ESS 용량정산금 제외 기준입니다. "
+                     "사업성은 기준 시나리오·발전량 예측 → 실행 → 정산·표준 수익 배분·"
+                     "ESS 용량정산금 제외 기준입니다. "
                      "할인율 7%, 20년, 구축비 50% 지원 가정이며 NPV는 보고서의 반올림 정밀도를 유지합니다.")
             st.caption("선택과 필터는 이 화면에만 적용됩니다. 운영 설정·계산 결과·현재 포트폴리오 선택은 바뀌지 않습니다.")
             for name, label in ((OPERATING, "운영 결과 CSV"), (SIZING, "용량 비교 CSV")):

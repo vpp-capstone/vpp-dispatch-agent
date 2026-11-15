@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{color-scheme:light;--ink:#173a44;--muted:#526e79;--green:#147660;--blue:#3d65a7;--line:#dce7e9;--soft:#f3f8f6}
+*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);font:14px/1.6 "Apple SD Gothic Neo",Pretendard,system-ui,sans-serif}h3,p{margin:0}button,select,input{font:inherit;color:inherit}button,select{border:1px solid var(--line);border-radius:8px;background:white;min-height:42px;padding:8px 13px;cursor:pointer}button:disabled{opacity:.4;cursor:default}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--green);outline-offset:3px}.shell{border:1px solid var(--line);border-radius:13px;padding:24px}.top,.clock-row,.controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.top h3{font-size:21px}.tag{background:var(--soft);color:var(--green);font-size:12px;padding:5px 9px;border-radius:6px}.intro,.caption{color:var(--muted);font-size:12px}.intro{margin-top:6px}.clock-row{margin:22px 0 15px}.clock{display:flex;align-items:center;gap:14px}.clock strong{font-size:32px;font-variant-numeric:tabular-nums}.badge{padding:4px 10px;border-radius:20px;font-weight:600;background:var(--soft)}.clock-row small{color:var(--muted)}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{padding:17px;border:1px solid var(--line);border-radius:10px;min-width:0}.metric span{display:block;font-size:12px;color:var(--muted)}.metric strong{display:block;font-size:25px;margin:6px 0;font-variant-numeric:tabular-nums}.metric small{font-size:11px;color:var(--muted)}.income{background:var(--soft);border-color:#b8d7cb}.battery-track{height:7px;background:#e4eeea;border-radius:10px;margin:8px 0;overflow:hidden}#battery-fill{height:100%;background:var(--green);transition:width .2s}.explain{margin:14px 0 20px;padding:12px 15px;border-radius:8px;background:var(--soft);font-size:13px}.charts{display:grid;grid-template-columns:1.15fr 1fr;gap:20px}.chart-title{display:flex;justify-content:space-between;gap:10px;font-size:13px}.legend{font-size:11px;color:var(--muted)}.charge{color:var(--green)}.discharge{color:var(--blue)}svg{display:block;width:100%;height:160px;overflow:visible}.scrub{margin:12px 0 18px}input[type=range]{width:100%;accent-color:var(--green);cursor:pointer;min-height:24px}.ticks{display:flex;justify-content:space-between;color:var(--muted);font-size:11px}.buttons{display:flex;gap:7px;flex-wrap:wrap}#play{background:var(--green);border-color:var(--green);color:white;min-width:96px;font-weight:600}.speed{font-size:12px;color:var(--muted)}.breakdown{display:flex;gap:10px 22px;flex-wrap:wrap;border-top:1px solid var(--line);margin-top:20px;padding-top:14px;font-size:12px;color:var(--muted)}.breakdown strong{color:var(--ink);margin-left:5px}.caption{margin-top:10px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+@media(max-width:740px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric{padding:12px}.metric strong{font-size:23px}.shell{padding:17px}.charts{grid-template-columns:1fr;gap:14px}svg{height:135px}.top h3{font-size:19px}.clock-row{margin-top:15px}}
+@media(prefers-reduced-motion:reduce){#battery-fill{transition:none}}
+</style>
+</head>
+<body>
+<section class="shell" aria-label="시간별 ESS 운전과 수입">
+  <div class="top"><h3>하루 운전과 수입</h3><span class="tag">forecast_exec / standard</span></div>
+  <p class="intro"><span id="day"></span> · 실측 발전량으로 실행·정산한 결과 · 연간 원본 대조 완료</p>
+  <div class="clock-row"><div class="clock"><strong id="clock">00:00</strong><span class="badge" id="mode">시작 전</span></div><small id="interval">재생을 누르면 1시간씩 흐릅니다</small></div>
+  <div class="metrics">
+    <div class="metric"><span>이 시간 충전량</span><strong id="charge">0.00 MWh</strong><small id="charge-total">오늘 누적 0.00 MWh</small></div>
+    <div class="metric"><span>이 시간 방전량</span><strong id="discharge">0.00 MWh</strong><small id="discharge-total">오늘 누적 0.00 MWh</small></div>
+    <div class="metric"><span>배터리 잔량 · SOC</span><strong id="soc"></strong><div class="battery-track" role="meter" aria-label="배터리 충전 상태" aria-valuemin="0" aria-valuemax="100" id="battery-meter"><div id="battery-fill"></div></div><small id="energy"></small></div>
+    <div class="metric income"><span>오늘 누적 VPP 수입</span><strong id="income">0원</strong><small id="hour-income">이 시간 0원</small></div>
+  </div>
+  <p class="explain" id="explain"></p>
+  <div class="charts">
+    <div><div class="chart-title"><strong>시간별 충·방전</strong><span class="legend"><span class="charge">● 충전 ↑</span>　<span class="discharge">● 방전 ↓</span> · MWh</span></div><svg id="dispatch-chart" viewBox="0 0 520 170" role="img" aria-label="하루 시간별 충방전량"></svg></div>
+    <div><div class="chart-title"><strong>오늘 누적 수입</strong><span class="legend">VPP 몫 · 원</span></div><svg id="income-chart" viewBox="0 0 520 170" role="img" aria-label="시간에 따른 누적 VPP 수입"></svg></div>
+  </div>
+  <div class="scrub"><label class="sr-only" for="timeline">재생 시각</label><input id="timeline" type="range" min="0" max="24" step="1" value="0"><div class="ticks"><span>00시</span><span>06시</span><span>12시</span><span>18시</span><span>24시</span></div></div>
+  <div class="controls"><div class="buttons"><button id="play" aria-pressed="false">재생</button><button id="previous" aria-label="이전 시간">이전</button><button id="next" aria-label="다음 시간">다음</button><button id="reset">처음</button></div><label class="speed">재생 속도 <select id="speed"><option value="1000">1배속</option><option value="500">2배속</option><option value="250">4배속</option></select></label></div>
+  <div class="breakdown"><span>오늘 누적 내역</span><span>ESS 방전 정산 <strong id="ess-income">0원</strong></span><span>태양광 용량정산금 50% <strong id="solar-income">0원</strong></span><span>페널티 차감 <strong id="penalty">0원</strong></span></div>
+  <p class="caption">수입은 투자·유지·교체비 차감 전입니다. 실시간 편차 정산은 이미 반영되어 있으며, ESS 용량정산금은 제외합니다.</p>
+  <p class="caption" id="status" role="status" aria-live="polite"></p>
+</section>
+<script id="replay-data" type="application/json">__REPLAY_DATA__</script>
+<script>
+(() => {
+  const data=JSON.parse(document.getElementById('replay-data').textContent), $=id=>document.getElementById(id);
+  const fmt=(v,d=2)=>(Math.abs(v)<.5*10**(-d)?0:v).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d}), won=v=>fmt(v,0)+'원';
+  const at=h=>String(h).padStart(2,'0')+':00';
+  let frame=0,timer=null,playing=false;
+  const x=i=>42+i*19, income=[0,...data.hours.map(h=>h.cumulative_vpp_income_krw)];
+  const lo=Math.min(0,...income), hi=Math.max(1,...income), y=v=>136-(v-lo)/(hi-lo)*114;
+  const maxPower=Math.max(.01,...data.hours.flatMap(h=>[h.charge_mwh,h.discharge_mwh]));
+  function charts(){
+    let bars='<line x1="42" y1="82" x2="498" y2="82" stroke="#dce7e9"/>';
+    data.hours.forEach((h,i)=>{
+      const ch=h.charge_mwh/maxPower*57, dis=h.discharge_mwh/maxPower*57, opacity=i<frame?1:.2;
+      bars+=`<rect x="${x(i)+2}" y="${82-ch}" width="7" height="${ch}" fill="#147660" opacity="${opacity}"/><rect x="${x(i)+10}" y="82" width="7" height="${dis}" fill="#3d65a7" opacity="${opacity}"/>`;
+    });
+    bars+=`<text x="0" y="27" font-size="11" fill="#526e79">${fmt(maxPower,1)}</text><text x="16" y="86" font-size="11" fill="#526e79">0</text><text x="0" y="143" font-size="11" fill="#526e79">−${fmt(maxPower,1)}</text>`;
+    let curve=`<line x1="42" y1="${y(0)}" x2="498" y2="${y(0)}" stroke="#dce7e9"/><text x="42" y="14" font-size="11" fill="#526e79">${won(hi)}</text><text x="42" y="157" font-size="11" fill="#526e79">${won(lo)}</text>`;
+    const points=income.slice(0,frame+1).map((v,i)=>`${x(i)},${y(v)}`).join(' ');
+    curve+=`<polyline points="${points}" fill="none" stroke="#147660" stroke-width="3"/><circle cx="${x(frame)}" cy="${y(income[frame])}" r="4" fill="#147660"/>`;
+    const cursor=`<line x1="${x(frame)}" y1="20" x2="${x(frame)}" y2="142" stroke="#173a44" stroke-width="1" stroke-dasharray="3 4"/>`;
+    $('dispatch-chart').innerHTML=bars+cursor;$('income-chart').innerHTML=curve+cursor;
+  }
+  function stop(){clearInterval(timer);timer=null;playing=false;}
+  function render(){
+    const h=frame?data.hours[frame-1]:null, energy=h?h.energy_end_mwh:data.initial_energy, soc=energy/data.capacity*100;
+    const c=k=>h?h['cumulative_'+k]:0;
+    $('day').textContent=data.date;$('clock').textContent=at(frame);$('timeline').value=frame;
+    $('timeline').setAttribute('aria-valuetext',at(frame));
+    const mode=!h?'시작 전':h.charge_mwh>1e-6?'충전':h.discharge_mwh>1e-6?'방전':'대기 · 직접 공급';
+    $('mode').textContent=mode;$('mode').style.color=mode==='방전'?'#3d65a7':'#147660';
+    $('interval').textContent=h?`${at(frame-1)}–${at(frame)} 실행 완료${frame===24?' · 하루 종료':''}`:'재생을 누르면 1시간씩 흐릅니다';
+    $('charge').textContent=fmt(h?h.charge_mwh:0)+' MWh';$('discharge').textContent=fmt(h?h.discharge_mwh:0)+' MWh';
+    $('charge-total').textContent='오늘 누적 '+fmt(c('charge_mwh'))+' MWh';$('discharge-total').textContent='오늘 누적 '+fmt(c('discharge_mwh'))+' MWh';
+    $('soc').textContent=fmt(soc,1)+'%';$('energy').textContent=fmt(energy)+' / '+fmt(data.capacity,1)+' MWh · 유효 용량';
+    $('battery-fill').style.width=soc+'%';$('battery-meter').setAttribute('aria-valuenow',soc.toFixed(1));
+    $('income').textContent=won(c('vpp_income_krw'));$('hour-income').textContent='이 시간 '+won(h?h.vpp_income_krw:0);
+    $('ess-income').textContent=won(c('vpp_ess_krw'));$('solar-income').textContent=won(c('vpp_solar_cp_krw'));$('penalty').textContent=won(c('vpp_penalty_krw'));
+    $('explain').textContent=h?`태양광 ${fmt(h.actual_generation_mwh)} MWh → ESS 충전 ${fmt(h.charge_mwh)} MWh · 방전 ${fmt(h.discharge_mwh)} MWh → 선로 공급 ${fmt(h.supply_mwh)} MWh`:`전날에서 이어진 배터리 잔량 ${fmt(data.initial_energy)} MWh에서 시작합니다. 재생하거나 시간 막대를 움직여 확인하세요.`;
+    $('play').textContent=playing?'일시정지':frame===24?'다시 재생':'재생';$('play').setAttribute('aria-pressed',String(playing));
+    $('previous').disabled=frame===0;$('next').disabled=frame===24;
+    $('status').textContent=`${frame} / 24시간 · ${playing?'재생 중':frame===24?'재생 완료':'일시정지'} · 누적 수입은 선택한 날짜의 0시부터 집계합니다.`;
+    charts();
+  }
+  function play(){stop();if(frame===24)frame=0;playing=true;render();timer=setInterval(()=>{frame++;if(frame===24)stop();render();},Number($('speed').value));}
+  $('play').onclick=()=>{if(playing){stop();render();}else play();};
+  $('previous').onclick=()=>{stop();frame=Math.max(0,frame-1);render();};$('next').onclick=()=>{stop();frame=Math.min(24,frame+1);render();};
+  $('reset').onclick=()=>{stop();frame=0;render();};$('timeline').oninput=()=>{stop();frame=Number($('timeline').value);render();};
+  $('speed').onchange=()=>{if(playing)play();};
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){stop();render();}});window.addEventListener('pagehide',stop);
+  render();
+})();
+</script>
+</body>
+</html>
