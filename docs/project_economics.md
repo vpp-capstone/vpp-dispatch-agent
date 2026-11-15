@@ -4,11 +4,11 @@
 운영 백테스트(48시간 롤링 MILP, 1년)가 내는 1년치 결과를 받아 투자비·지원금·유지비·교체비를 붙인다.
 
 ```
-운영 백테스트 1년 (계획·실행)                     설정 (config/project_economics_v0.yaml)
-  RollingResult.hourly                              공고 조건, 비용 가정, 배터리 종류,
-        |  operating_row_from_hourly()              PPA 단가, 표준 수익 배분
-        v                                                   |
-  운영 결과 CSV (case x battery x operation 한 행) ---------+--> project_economics.py
+vpp.distribution_backtest (1년, 날마다 48시간 MILP)    설정 (config/project_economics_v0.yaml)
+  확정 24시간 시간별 결과                               공고 조건, 비용 가정, 배터리 종류,
+        |  operating_row_from_hourly()                  PPA 단가, 표준 수익 배분
+        v                                                       |
+  운영 결과 CSV (case x battery x operation 한 행) -------------+--> project_economics.py
                                                                      |
                                economics_summary.csv (조합별 NPV·IRR·손익분기·참여 판단)
                                economics_cashflow.csv (기준 시나리오 연도별 현금흐름)
@@ -19,10 +19,27 @@
 
 ## 실행
 
+1단계: 1년 운영 백테스트 → 운영 결과 CSV (`vpp.distribution_backtest`, 2코어 기준 약 10분)
+
+```bash
+python -m vpp.distribution_backtest \
+  --solar <시간별 태양광 CSV: ts, solar_traded_mwh> \
+  --forecast <SMP v6 예측 CSV: python -m vpp.smp_forecast 출력> \
+  --start 2025-01-01 --end 2025-12-31 \
+  --out docs/results/distribution_ess_operating_20261115.csv
+```
+
+- 기본: 설정의 모든 배터리 x 고정 상한 1.5~4.0MW(0.25 간격) + 동적 상한 1.0~2.5MW x 예측·정답 운전.
+  `--batteries`, `--fixed-caps`, `--dynamic-caps`, `--existing-pv-mw`, `--operations` 로 바꾼다.
+- ESS 용량 비교: `--sizes 2:8,3:12,4:20` (MW:MWh). 행에 `ess_power_mw`·`ess_energy_mwh` 가 붙고
+  사업성 계산이 그 용량으로 구축비·지원금을 잡는다.
+
+2단계: 20년 사업성
+
 ```bash
 python -m vpp.project_economics \
   --config config/project_economics_v0.yaml \
-  --operating docs/results/distribution_ess_operating_interim_20261115.csv \
+  --operating docs/results/distribution_ess_operating_20261115.csv \
   --out-dir data/processed/economics
 ```
 
@@ -153,14 +170,17 @@ IRR은 NPV를 0으로 만드는 $r$. 손익분기 값은 다른 입력은 그대
 | `breakeven_capex_krw` | NPV = 0 이 되는 구축비 |
 | `min_annual_market_revenue_krw` | NPV = 0 에 필요한 1년차 VPP 수익 |
 | `breakeven_ppa_krw_per_kwh` | VPP가 태양광 소유자에게 줄 수 있는 최대 PPA 단가 (빈칸 = 0원이어도 적자 또는 `standard`) |
+| `needed_annual_support_krw` | NPV를 0으로 만드는 매년 같은 보상액 (비증설대안 NWAs 보상 등). 흑자면 0 |
+| `ess_power_mw`, `ess_energy_mwh` | 계산에 쓴 ESS 용량 |
 | `decision` | NPV > 0 이면 `참여 검토`, 아니면 `비참여` |
 
-결과 해석은 [results/distribution_ess_economics_interim_20261115.md](results/distribution_ess_economics_interim_20261115.md).
+결과 해석은 [results/distribution_ess_economics_20261115.md](results/distribution_ess_economics_20261115.md).
 
 ## 한계 (v0)
 
-- 운영 결과는 아직 임시 백테스트다. 한전이 주는 시간별 허용범위 대신 고정 상한(낮 8~18시)과
-  가정한 동적 상한을 쓴다.
+- 한전이 주는 시간별 허용범위 대신 고정 상한(낮 8~18시)과 가정한 동적 상한을 쓴다.
+- 발전량은 실측을 그대로 써서 발전량 예측 오차와 임밸런스 페널티가 0이다.
+- ESS 용량정산금 실효용량은 용량과 관계없이 4시간 ESS 비율(65.63%)을 쓴다.
 - 우리 시장 데이터(SMP, REC, RCP)는 제주인데 공고 대상 선로는 모두 육지다. 육지 선로에 쓰려면 육지
   가격만 바꿔 넣으면 된다.
 - 20년치 시간별 운전을 다시 풀지 않는다. 1년 결과에 연 변화율만 곱한다 (용량 감소 미반영).
