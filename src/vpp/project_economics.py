@@ -24,6 +24,21 @@
 | ess_charge_mwh, ess_discharge_mwh | 1년 충방전량. 배터리 수명(교체 시점) 계산에 쓴다 |
 | days | 백테스트 일수 (없으면 365). 365가 아니면 1년으로 환산 |
 
+선택 열 (항목별 수익, 1년 기준 원). 다섯 열이 모두 있으면 공고 표준 수익 배분(``standard``)도
+계산한다.
+
+| 열 | 뜻 |
+| --- | --- |
+| solar_direct_revenue_krw | 태양광을 바로 판 SMP+REC 수익 |
+| ess_discharge_revenue_krw | ESS 방전분을 판 SMP+REC 수익 |
+| solar_capacity_payment_krw | 태양광 용량정산금 |
+| ess_capacity_payment_krw | ESS 용량정산금 = min(방전량, 실효용량) x RCP. |
+|  | market_revenue_krw 에 넣지 않는다 |
+| imbalance_penalty_krw | 임밸런스 페널티 (양수 = 낸 돈) |
+
+시간별 운전 결과(``RollingResult.hourly``)에서 이 행을 만들 때는
+``operating_row_from_hourly`` 를 쓴다.
+
 ESS 없이 같은 선로 상한 안에서 태양광만 판 기준선은 ``battery`` 를 ``none`` 으로 둔 행으로 넣는다
 (case·operation 이 같은 행끼리 비교). 기준선이 있으면 두 관점을 함께 낸다.
 
@@ -31,6 +46,13 @@ ESS 없이 같은 선로 상한 안에서 태양광만 판 기준선은 ``batter
   VPP 몫 = 시장수익 증가분 - PPA 단가 x 태양광 수전 증가분 - ESS 비용.
   태양광 소유자 몫 = PPA 단가 x 태양광 수전 증가분 (출력제어로 버리던 전력을 팔게 된 몫).
 - ``total``: 태양광+ESS 묶음 전체 (PPA 모드면 모든 태양광 수전량에 PPA 지급).
+  공고 대상 태양광은 접속대기라 ESS 없이는 접속하지 못한다. 그래서 공고 조건의 참여 판단은
+  이 관점(또는 standard)으로 하고, incremental 은 ESS 없이도 접속할 수 있는 경우(유연접속)용이다.
+- ``standard``: 2차 공고 표준 수익 배분 예시대로 항목별 수익을 VPP와 발전사업자가 나눈다.
+  VPP 몫 = ESS 방전 수익 + 태양광 용량정산금 50% (+ ESS 용량정산금) - 페널티. PPA 없음.
+
+ESS 용량정산금은 인정 여부가 불확실해서 ``ess_capacity_payment_scenarios`` 로 넣은 경우와 뺀 경우를
+모두 계산한다 (결과 열 ``ess_capacity_payment``).
 
 열화비는 배터리 구입비를 처리량에 나눠 붙인 값이라, 구입비를 따로 넣는 여기서는 빼지 않는다
 (두 번 빼지 않기 위해). 운전 판단에 쓸 열화비는 ``Battery.throughput_cost_krw_per_mwh``로 만든다.
@@ -56,6 +78,21 @@ OPERATING_COLUMNS = [
     "ess_charge_mwh",
     "ess_discharge_mwh",
 ]
+BREAKDOWN_COLUMNS = [
+    "solar_direct_revenue_krw",
+    "ess_discharge_revenue_krw",
+    "solar_capacity_payment_krw",
+    "ess_capacity_payment_krw",
+    "imbalance_penalty_krw",
+]
+# standard_vpp_shares 의 키 -> 운영 결과 열
+STANDARD_ITEMS = {
+    "solar_energy": "solar_direct_revenue_krw",
+    "ess_energy": "ess_discharge_revenue_krw",
+    "solar_capacity_payment": "solar_capacity_payment_krw",
+    "ess_capacity_payment": "ess_capacity_payment_krw",
+    "imbalance_penalty": "imbalance_penalty_krw",
+}
 
 
 @dataclass(frozen=True)
@@ -121,6 +158,8 @@ class EconomicsConfig:
     ppa_prices: tuple[float, ...]
     solar_capex_krw: float | None
     batteries: dict[str, Battery] = field(default_factory=dict)
+    standard_vpp_shares: dict[str, float] = field(default_factory=dict)
+    ess_cp_scenarios: tuple[bool, ...] = (False,)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> EconomicsConfig:
@@ -147,6 +186,12 @@ class EconomicsConfig:
             ppa_prices=tuple(float(p) for p in (ppa if isinstance(ppa, list) else [ppa])),
             solar_capex_krw=_opt_float(s.get("solar_capex_krw")),
             batteries={k: Battery(key=k, **v) for k, v in raw["batteries"].items()},
+            standard_vpp_shares={
+                k: float(v) for k, v in (s.get("standard_vpp_shares") or {}).items()
+            },
+            ess_cp_scenarios=tuple(
+                bool(x) for x in raw.get("ess_capacity_payment_scenarios") or [False]
+            ),
         )
         cfg.validate()
         return cfg
@@ -160,6 +205,9 @@ class EconomicsConfig:
             raise ValueError("integrated 모드에는 solar_capex_krw 가 필요합니다.")
         if not 0 <= self.subsidy_rate <= 1:
             raise ValueError("subsidy_rate 는 0~1 이어야 합니다.")
+        unknown = set(self.standard_vpp_shares) - set(STANDARD_ITEMS)
+        if unknown or not all(0 <= v <= 1 for v in self.standard_vpp_shares.values()):
+            raise ValueError(f"standard_vpp_shares 가 올바르지 않습니다: {sorted(unknown)}")
         for bat in self.batteries.values():
             if not (0 < bat.soh <= 1 and 0 < bat.efficiency <= 1 and bat.cycle_life > 0):
                 raise ValueError(f"배터리 {bat.key} 값이 올바르지 않습니다.")
@@ -321,13 +369,10 @@ def evaluate(cfg: EconomicsConfig, battery: Battery, op: Operating, **kw) -> dic
     cf = cashflow(cfg, battery, op, **kw)
     r = cfg.discount_rate
     capex = cf.attrs["capex"]
-    base_kw = {
-        k: v for k, v in kw.items() if k not in ("subsidy_rate", "capex_krw", "revenue_scale")
-    }
-    # 손익분기 PPA 단가를 구할 때는 ppa_krw_per_kwh 를 덮어쓴다
 
     def npv_with(**over):
-        f, _ = _flows(cfg, battery, op, **{**base_kw, **over})
+        # 손익분기를 구하는 값만 덮어쓰고, 나머지 입력(구축비·지원율 등)은 그대로 둔다
+        f, _ = _flows(cfg, battery, op, **{**kw, **over})
         return _npv_arr(sum(f.values()), r)
 
     be_rate = _solve(lambda s: npv_with(subsidy_rate=s), 0.0, 1.0)
@@ -366,7 +411,8 @@ def load_operating(path: str | Path) -> pd.DataFrame:
         raise ValueError(f"운영 결과 파일에 열이 없습니다: {missing}")
     days = df["days"] if "days" in df.columns else 365
     scale = 365.0 / pd.Series(days, index=df.index).astype(float)
-    for c in ("market_revenue_krw", "solar_to_vpp_mwh", "ess_charge_mwh", "ess_discharge_mwh"):
+    cols = ["market_revenue_krw", "solar_to_vpp_mwh", "ess_charge_mwh", "ess_discharge_mwh"]
+    for c in cols + [c for c in BREAKDOWN_COLUMNS if c in df.columns]:
         df[c] = df[c].astype(float) * scale
     return df
 
@@ -374,86 +420,185 @@ def load_operating(path: str | Path) -> pd.DataFrame:
 BASELINE_BATTERY = "none"
 
 
-def _operating_views(operating: pd.DataFrame) -> list[tuple[pd.Series, str, Operating, float]]:
-    """ESS 행마다 (행, basis, Operating, 태양광 수전 증가분) 목록.
+@dataclass(frozen=True)
+class _View:
+    row: pd.Series
+    basis: str
+    op: Operating  # ESS 용량정산금 제외
+    ess_cp_vpp_krw: float  # ESS 용량정산금을 넣을 때 VPP 수익에 더할 금액 (nan = 자료 없음)
+    d_solar_mwh: float  # PPA 를 주는 태양광 수전량 (standard 는 0)
+    owner_fixed_krw: float  # standard: 발전사업자 몫 (ESS 용량정산금 제외)
+    owner_ess_cp_krw: float  # standard: ESS 용량정산금 중 발전사업자 몫
 
-    기준선이 있으면 incremental 도 만든다.
-    """
+
+def _has_breakdown(df: pd.DataFrame) -> bool:
+    return all(c in df.columns for c in BREAKDOWN_COLUMNS)
+
+
+def _standard_view(cfg: EconomicsConfig, r: pd.Series, thr: float) -> _View:
+    sh = {k: cfg.standard_vpp_shares.get(k, 0.0) for k in STANDARD_ITEMS}
+    vpp = owner = 0.0
+    for key, col in STANDARD_ITEMS.items():
+        if key == "ess_capacity_payment":
+            continue
+        sign = -1.0 if key == "imbalance_penalty" else 1.0
+        vpp += sign * sh[key] * r[col]
+        owner += sign * (1 - sh[key]) * r[col]
+    cp = r["ess_capacity_payment_krw"]
+    sh_cp = sh["ess_capacity_payment"]
+    return _View(r, "standard", Operating(vpp, 0.0, thr), sh_cp * cp, 0.0, owner, (1 - sh_cp) * cp)
+
+
+def _operating_views(cfg: EconomicsConfig, operating: pd.DataFrame) -> list[_View]:
+    """ESS 행마다 관점(total / incremental / standard)별 입력."""
     base = operating[operating["battery"] == BASELINE_BATTERY].set_index(["case", "operation"])
     if base.index.duplicated().any():
         raise ValueError("같은 case·operation 의 기준선(battery=none) 행이 두 개 이상입니다.")
+    breakdown = _has_breakdown(operating)
+    nan = float("nan")
     views = []
     for _, r in operating[operating["battery"] != BASELINE_BATTERY].iterrows():
         thr = r["ess_charge_mwh"] + r["ess_discharge_mwh"]
-        views.append(
-            (
-                r,
-                "total",
-                Operating(r["market_revenue_krw"], r["solar_to_vpp_mwh"], thr),
-                float("nan"),
-            )
-        )
+        cp = r["ess_capacity_payment_krw"] if "ess_capacity_payment_krw" in r.index else nan
+        op = Operating(r["market_revenue_krw"], r["solar_to_vpp_mwh"], thr)
+        views.append(_View(r, "total", op, cp, r["solar_to_vpp_mwh"], nan, nan))
         key = (r["case"], r["operation"])
         if key in base.index:
             b = base.loc[key]
             d_solar = r["solar_to_vpp_mwh"] - b["solar_to_vpp_mwh"]
             op = Operating(r["market_revenue_krw"] - b["market_revenue_krw"], d_solar, thr)
-            views.append((r, "incremental", op, d_solar))
+            views.append(_View(r, "incremental", op, cp, d_solar, nan, nan))
+        if breakdown and cfg.standard_vpp_shares:
+            views.append(_standard_view(cfg, r, thr))
     return views
 
 
 def summarize(cfg: EconomicsConfig, operating: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """운영 결과 x 관점 x 시장수익 시나리오 x PPA 단가 조합의 지표와 기준 시나리오 현금흐름."""
+    """운영 결과 x 관점 x ESS 용량정산금 x 시장수익 시나리오 x PPA 단가 조합의 지표와
+    기준 시나리오 현금흐름."""
     unknown = set(operating["battery"]) - set(cfg.batteries) - {BASELINE_BATTERY}
     if unknown:
         raise ValueError(f"설정에 없는 배터리: {sorted(unknown)}")
     rows, flows = [], []
-    ppas = cfg.ppa_prices if cfg.split_mode == "ppa" else (None,)
-    for r, basis, op, d_solar in _operating_views(operating):
+    for v in _operating_views(cfg, operating):
+        r = v.row
         bat = cfg.batteries[r["battery"]]
-        extra = {"include_solar_capex": basis == "total"}
-        for scen, g in cfg.revenue_scenarios.items():
-            for ppa in ppas:
-                m = evaluate(cfg, bat, op, growth=g, ppa_krw_per_kwh=ppa, **extra)
-                owner = (ppa or 0.0) * 1000.0 * d_solar if basis == "incremental" else float("nan")
-                rows.append(
-                    {
-                        "case": r["case"],
-                        "battery": r["battery"],
-                        "battery_label": bat.label,
-                        "operation": r["operation"],
-                        "basis": basis,
-                        "revenue_scenario": scen,
-                        "ppa_krw_per_kwh": ppa,
-                        "annual_market_revenue_krw": op.market_revenue_krw,
-                        "annual_solar_to_vpp_mwh": op.solar_to_vpp_mwh,
-                        "solar_owner_gain_krw_per_year": owner,
-                        "throughput_cost_krw_per_mwh": bat.throughput_cost_krw_per_mwh(
-                            cfg.ess_energy_mwh, cfg.fx
-                        ),
-                        **m,
-                        "decision": "참여 검토" if m["npv_krw"] > 0 else "비참여",
-                    }
-                )
-                if scen == "base":
-                    cf = cashflow(
-                        cfg, bat, op, growth=g, ppa_krw_per_kwh=ppa, **extra
-                    ).reset_index()
-                    cf.insert(0, "ppa_krw_per_kwh", ppa)
-                    for k, v in (
-                        ("basis", basis),
-                        ("operation", r["operation"]),
-                        ("battery", r["battery"]),
-                        ("case", r["case"]),
-                    ):
-                        cf.insert(0, k, v)
-                    flows.append(cf)
+        extra = {"include_solar_capex": v.basis == "total"}
+        if v.basis == "standard" or cfg.split_mode != "ppa":
+            ppas: tuple = (None,)
+        else:
+            ppas = cfg.ppa_prices
+        for with_cp in cfg.ess_cp_scenarios:
+            if with_cp and math.isnan(v.ess_cp_vpp_krw):
+                continue
+            add = v.ess_cp_vpp_krw if with_cp else 0.0
+            op = Operating(
+                v.op.market_revenue_krw + add, v.op.solar_to_vpp_mwh, v.op.ess_throughput_mwh
+            )
+            for scen, g in cfg.revenue_scenarios.items():
+                for ppa in ppas:
+                    kw = {"growth": g, "ppa_krw_per_kwh": 0.0 if ppa is None else ppa, **extra}
+                    m = evaluate(cfg, bat, op, **kw)
+                    if v.basis == "standard":
+                        owner = v.owner_fixed_krw + (v.owner_ess_cp_krw if with_cp else 0.0)
+                    else:
+                        owner = (ppa or 0.0) * 1000.0 * v.d_solar_mwh
+                    rows.append(
+                        {
+                            "case": r["case"],
+                            "battery": r["battery"],
+                            "battery_label": bat.label,
+                            "operation": r["operation"],
+                            "basis": v.basis,
+                            "ess_capacity_payment": with_cp,
+                            "revenue_scenario": scen,
+                            "ppa_krw_per_kwh": ppa,
+                            "annual_market_revenue_krw": op.market_revenue_krw,
+                            "annual_solar_to_vpp_mwh": op.solar_to_vpp_mwh,
+                            "solar_owner_gain_krw_per_year": owner,
+                            "throughput_cost_krw_per_mwh": bat.throughput_cost_krw_per_mwh(
+                                cfg.ess_energy_mwh, cfg.fx
+                            ),
+                            **m,
+                            "decision": "참여 검토" if m["npv_krw"] > 0 else "비참여",
+                        }
+                    )
+                    if scen == "base":
+                        cf = cashflow(cfg, bat, op, **kw).reset_index()
+                        meta = (
+                            ("ppa_krw_per_kwh", ppa),
+                            ("ess_capacity_payment", with_cp),
+                            ("basis", v.basis),
+                            ("operation", r["operation"]),
+                            ("battery", r["battery"]),
+                            ("case", r["case"]),
+                        )
+                        for k, val in meta:
+                            cf.insert(0, k, val)
+                        flows.append(cf)
     return pd.DataFrame(rows), pd.concat(flows, ignore_index=True)
+
+
+def operating_row_from_hourly(
+    hourly: pd.DataFrame,
+    *,
+    case: str,
+    battery: str,
+    operation: str,
+    solar_capacity_credit_mw: float = 0.0,
+    ess_capacity_credit_mw: float = 0.0,
+    rcp_krw_per_kwh_h: float = 0.0,
+    imbalance_penalty_krw: float = 0.0,
+) -> dict:
+    """시간별 운전 결과 한 기간을 운영 결과 CSV 한 행으로 바꾼다.
+
+    hourly: ``RollingResult.hourly`` 처럼 ts, price_krw_per_mwh(정산 SMP), sell_mwh, charge_mwh,
+    discharge_mwh 열을 가진 표. ``rec_krw_per_mwh`` 가 있으면 판매 단가에 더하고, ``committed``
+    가 있으면 확정 구간만 쓴다. 판매량(sell)에는 방전분이 포함돼 있다고 본다.
+
+    용량정산금 = Σ min(판매량, 실효용량) x RCP (태양광은 바로 판 양, ESS 는 방전량 기준).
+    실효용량 예: 태양광 5.7MW x 3.84%, ESS 4MW x 65.63%. RCP 예: 제주 22.05원/kW-h.
+    열화비는 빼지 않는다 (사업성에서는 배터리 비용을 구축비·교체비로 넣는다).
+    """
+    h = hourly
+    if "committed" in h.columns:
+        h = h[h["committed"].astype(bool)]
+    need = ["ts", "price_krw_per_mwh", "sell_mwh", "charge_mwh", "discharge_mwh"]
+    missing = [c for c in need if c not in h.columns]
+    if missing:
+        raise ValueError(f"시간별 결과에 열이 없습니다: {missing}")
+    price = h["price_krw_per_mwh"].to_numpy(float)
+    if "rec_krw_per_mwh" in h.columns:
+        price = price + h["rec_krw_per_mwh"].fillna(0.0).to_numpy(float)
+    sell = h["sell_mwh"].to_numpy(float)
+    ch = h["charge_mwh"].to_numpy(float)
+    dis = np.minimum(h["discharge_mwh"].to_numpy(float), sell)
+    direct = np.maximum(sell - dis, 0.0)
+    to_krw = 1000.0 * rcp_krw_per_kwh_h
+    solar_cp = float(np.minimum(direct, solar_capacity_credit_mw).sum() * to_krw)
+    ess_cp = float(np.minimum(dis, ess_capacity_credit_mw).sum() * to_krw)
+    solar_rev = float(price @ direct)
+    ess_rev = float(price @ dis)
+    return {
+        "case": case,
+        "battery": battery,
+        "operation": operation,
+        "market_revenue_krw": solar_rev + ess_rev + solar_cp - imbalance_penalty_krw,
+        "solar_to_vpp_mwh": float(direct.sum() + ch.sum()),
+        "ess_charge_mwh": float(ch.sum()),
+        "ess_discharge_mwh": float(h["discharge_mwh"].sum()),
+        "days": int(pd.to_datetime(h["ts"]).dt.date.nunique()),
+        "solar_direct_revenue_krw": solar_rev,
+        "ess_discharge_revenue_krw": ess_rev,
+        "solar_capacity_payment_krw": solar_cp,
+        "ess_capacity_payment_krw": ess_cp,
+        "imbalance_penalty_krw": float(imbalance_penalty_krw),
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="배전망 ESS 20년 사업성 (참여 판단)")
-    p.add_argument("--config", default="config/distribution_ess_v0.yaml")
+    p.add_argument("--config", default="config/project_economics_v0.yaml")
     p.add_argument("--operating", required=True, help="운영 백테스트 1년 결과 CSV")
     p.add_argument("--out-dir", default="data/processed/economics")
     args = p.parse_args(argv)
@@ -463,9 +608,11 @@ def main(argv: list[str] | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     summary.to_csv(out / "economics_summary.csv", index=False, encoding="utf-8-sig")
     flows.to_csv(out / "economics_cashflow.csv", index=False, encoding="utf-8-sig")
-    view = summary[(summary["revenue_scenario"] == "base")]
-    if (view["basis"] == "incremental").any():
-        view = view[view["basis"] == "incremental"]
+    view = summary[(summary["revenue_scenario"] == "base") & ~summary["ess_capacity_payment"]]
+    for basis in ("standard", "total"):
+        if (view["basis"] == basis).any():
+            view = view[view["basis"] == basis]
+            break
     cols = [
         "case",
         "battery",

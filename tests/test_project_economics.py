@@ -5,7 +5,7 @@ import pytest
 
 from vpp import project_economics as pe
 
-CFG = pe.EconomicsConfig.from_yaml("config/distribution_ess_v0.yaml")
+CFG = pe.EconomicsConfig.from_yaml("config/project_economics_v0.yaml")
 OP = pe.Operating(market_revenue_krw=15e8, solar_to_vpp_mwh=8000.0, ess_throughput_mwh=6000.0)
 
 
@@ -172,3 +172,106 @@ def test_breakeven_ppa_puts_npv_at_zero():
     assert pe.npv(cf["net"], CFG.discount_rate) == pytest.approx(0.0, abs=1e3)
     poor = pe.Operating(market_revenue_krw=1e7, solar_to_vpp_mwh=3000.0, ess_throughput_mwh=5700.0)
     assert pd.isna(pe.evaluate(CFG, b, poor, ppa_krw_per_kwh=0)["breakeven_ppa_krw_per_kwh"])
+
+
+def test_breakevens_keep_other_overrides():
+    """구축비를 바꿔 넣으면 손익분기 PPA·지원율도 그 구축비 기준이어야 한다."""
+    b = CFG.batteries["new_2025_bnef"]
+    op = pe.Operating(market_revenue_krw=15e8, solar_to_vpp_mwh=8000.0, ess_throughput_mwh=5700.0)
+    cheap = pe.evaluate(CFG, b, op, ppa_krw_per_kwh=0)
+    dear = pe.evaluate(CFG, b, op, ppa_krw_per_kwh=0, capex_krw=2 * cheap["capex_krw"])
+    assert dear["breakeven_ppa_krw_per_kwh"] < cheap["breakeven_ppa_krw_per_kwh"]
+    cf = pe.cashflow(
+        CFG,
+        b,
+        op,
+        ppa_krw_per_kwh=dear["breakeven_ppa_krw_per_kwh"],
+        capex_krw=2 * cheap["capex_krw"],
+    )
+    assert pe.npv(cf["net"], CFG.discount_rate) == pytest.approx(0.0, abs=1e3)
+
+
+def test_kr_notice_example_capex_matches_notice():
+    """2차 공고 신청서 예시 4MW/20MWh 총 57.14억원."""
+    b = CFG.batteries["kr_notice_example"]
+    assert b.capex_krw(CFG.ess_energy_mwh, CFG.fx) == pytest.approx(57.14e8, rel=1e-3)
+
+
+def _hourly():
+    ts = pd.date_range("2025-06-01", periods=4, freq="h")
+    return pd.DataFrame(
+        {
+            "ts": ts,
+            "price_krw_per_mwh": [100_000.0, 100_000.0, 200_000.0, 50_000.0],
+            "rec_krw_per_mwh": [70_000.0] * 4,
+            "sell_mwh": [1.0, 2.0, 4.0, 9.0],
+            "charge_mwh": [3.0, 0.0, 0.0, 0.0],
+            "discharge_mwh": [0.0, 0.0, 3.0, 0.0],
+            "committed": [True, True, True, False],
+        }
+    )
+
+
+def test_operating_row_from_hourly_splits_solar_and_ess():
+    row = pe.operating_row_from_hourly(
+        _hourly(),
+        case="c",
+        battery="new_2025_bnef",
+        operation="forecast",
+        solar_capacity_credit_mw=0.5,
+        ess_capacity_credit_mw=2.0,
+        rcp_krw_per_kwh_h=20.0,
+        imbalance_penalty_krw=1000.0,
+    )
+    # 확정 구간 3시간만. 3시는 판매 4 중 방전 3, 태양광 직접 1
+    assert row["solar_direct_revenue_krw"] == pytest.approx(170e3 * 1 + 170e3 * 2 + 270e3 * 1)
+    assert row["ess_discharge_revenue_krw"] == pytest.approx(270e3 * 3)
+    assert row["solar_capacity_payment_krw"] == pytest.approx(0.5 * 3 * 20_000)
+    assert row["ess_capacity_payment_krw"] == pytest.approx(2.0 * 20_000)
+    assert row["solar_to_vpp_mwh"] == pytest.approx(1 + 2 + 1 + 3)
+    assert row["market_revenue_krw"] == pytest.approx(
+        row["solar_direct_revenue_krw"]
+        + row["ess_discharge_revenue_krw"]
+        + row["solar_capacity_payment_krw"]
+        - 1000.0
+    )
+    assert row["days"] == 1
+    with pytest.raises(ValueError):
+        pe.operating_row_from_hourly(
+            _hourly().drop(columns="sell_mwh"), case="c", battery="b", operation="o"
+        )
+
+
+def _with_breakdown():
+    row = {
+        "case": "c",
+        "battery": "new_2025_bnef",
+        "operation": "forecast",
+        "solar_to_vpp_mwh": 8000.0,
+        "ess_charge_mwh": 3000.0,
+        "ess_discharge_mwh": 2700.0,
+        "solar_direct_revenue_krw": 10e8,
+        "ess_discharge_revenue_krw": 5e8,
+        "solar_capacity_payment_krw": 0.2e8,
+        "ess_capacity_payment_krw": 0.5e8,
+        "imbalance_penalty_krw": 0.1e8,
+    }
+    row["market_revenue_krw"] = 10e8 + 5e8 + 0.2e8 - 0.1e8
+    return pd.DataFrame([row])
+
+
+def test_standard_basis_applies_notice_shares():
+    summary, _ = pe.summarize(CFG, _with_breakdown())
+    std = summary[(summary["basis"] == "standard") & (summary["revenue_scenario"] == "base")]
+    no_cp = std[~std["ess_capacity_payment"]].iloc[0]
+    with_cp = std[std["ess_capacity_payment"]].iloc[0]
+    # VPP: ESS 방전 100% + 태양광 용량정산금 50% - 페널티 100%
+    assert no_cp["annual_market_revenue_krw"] == pytest.approx(5e8 + 0.1e8 - 0.1e8)
+    assert with_cp["annual_market_revenue_krw"] == pytest.approx(5e8 + 0.5e8)
+    # 발전사업자: 태양광 에너지 100% + 태양광 용량정산금 50%
+    assert no_cp["solar_owner_gain_krw_per_year"] == pytest.approx(10e8 + 0.1e8)
+    assert pd.isna(no_cp["ppa_krw_per_kwh"])
+    assert pd.isna(no_cp["breakeven_ppa_krw_per_kwh"])
+    # total 관점은 ESS 용량정산금 포함 여부로 두 번 계산된다
+    tot = summary[(summary["basis"] == "total") & (summary["revenue_scenario"] == "base")]
+    assert set(tot["ess_capacity_payment"]) == {False, True}
