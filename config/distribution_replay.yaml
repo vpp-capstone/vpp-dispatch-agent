@@ -1,0 +1,11 @@
+# Existing calculation functions are reused; published annual results are never overwritten.
+generation: artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet
+# Point predictions reconciled to #27; the newly uploaded smp_forecast.csv differs.
+forecast: data/processed/forecast/smp_forecast_distribution_2025.csv
+market: data/processed/market/market_hourly.csv
+fcr:
+  - data/processed/market/fcr_hourly.csv
+  - data/raw/market/reserve_prices/한국전력거래소_실시간예비력가격_20260630.csv
+rec: config/rec_v0_monthly.yaml
+ess: config/ess_v0_1.yaml
+economics: config/project_economics_v0.yaml
