@@ -54,7 +54,7 @@ def _tables(section: str) -> list[list[list[str]]]:
 
 
 def report_values(text: str) -> dict[tuple, dict]:
-    """Extract only standard/base/forecast/no-ESS-CP tables from the fixed report."""
+    """Extract only standard/base/forecast_exec/no-ESS-CP tables from the fixed report."""
     sections = {}
     for block in re.split(r"(?m)^## ", text)[1:]:
         match = re.match(r"(\d+)\.", block)
@@ -73,7 +73,7 @@ def report_values(text: str) -> dict[tuple, dict]:
         if field == "npv_krw":
             record["npv_source"] = f"결과 보고서 §{section} · 소수 1자리 억원"
 
-    for section, prefix in ((1, "cap"), (2, "dyn")):
+    for section, prefix in ((1, "cap"), (5, "dyn")):
         tables = _tables(sections.get(section, ""))
         if not tables:
             continue
@@ -90,7 +90,8 @@ def report_values(text: str) -> dict[tuple, dict]:
                             ("**신품 2025 BNEF", "new_2025_bnef")):
         if marker not in sizing:
             continue
-        tail = sizing.split(marker, 1)[1]
+        # Skip the heading line, including its closing **, before finding the next heading.
+        tail = sizing.split(marker, 1)[1].partition("\n")[2]
         tail = re.split(r"(?m)^\*\*", tail, maxsplit=1)[0]
         tables = _tables(tail)
         if not tables:
@@ -137,7 +138,7 @@ def load_display(root: Path) -> tuple[pd.DataFrame, str]:
             frame = frame.assign(ess_power_mw=4.0, ess_energy_mwh=20.0)
         elif not set(IDENTITY).issubset(frame):
             raise ValueError("용량 비교 결과에 정격 용량 열이 없습니다.")
-        frame = frame[(frame.operation == "forecast") & (frame.battery != "none")].copy()
+        frame = frame[(frame.operation == "forecast_exec") & (frame.battery != "none")].copy()
         numeric = ["ess_power_mw", "ess_energy_mwh", "ess_charge_mwh", "ess_discharge_mwh",
                    "ess_discharge_revenue_krw", "days"]
         if frame[numeric].isna().any().any():

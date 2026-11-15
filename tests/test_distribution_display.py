@@ -4,6 +4,7 @@ from pathlib import Path
 from shutil import copyfile
 
 import pandas as pd
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from dashboard.distribution_display import (
@@ -15,17 +16,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_reported_values_and_unreported_combinations():
     rows, _ = load_display(ROOT)
-    assert len(rows) == 183
+    assert len(rows) == 135
     assert rows.id.is_unique
+    assert rows.operation.eq("forecast_exec").all()
     indexed = rows.set_index("id")
     small = indexed.loc["cap_2.50MW|kr_notice_example|2:8"]
     large = indexed.loc["cap_2.50MW|kr_notice_example|4:20"]
-    assert small.npv_krw == 4.2e8  # Exact published precision; no cashflow recalculation.
-    assert large.npv_krw == -15.1e8
-    assert large.needed_annual_support_krw == 1.43e8
+    assert small.npv_krw == -1.5e8  # Exact published precision; no cashflow recalculation.
+    assert large.npv_krw == -26.4e8
+    assert large.needed_annual_support_krw == pytest.approx(2.49e8, rel=0, abs=1e-6)
+    dynamic = indexed.loc["dyn_1.00MW|second_life_example|4:20"]
+    assert dynamic.npv_krw == 2.5e8
+    assert dynamic.npv_source == "결과 보고서 §5 · 소수 1자리 억원"
     assert pd.isna(small.needed_annual_support_krw)
     assert pd.isna(indexed.loc["cap_1.75MW|new_2025_bnef|4:20"].npv_krw)
-    assert pd.isna(indexed.loc["cap_2.50MW|kr_notice_example|3:15"].npv_krw)
+    # Forecast-only sizing rows must not be substituted for execution results.
+    assert "cap_2.50MW|kr_notice_example|3:15" not in indexed.index
+    assert "cap_2.50MW|second_life_example|2:8" not in indexed.index
 
 
 def test_operating_money_and_energy_are_copied_without_rescaling():
@@ -34,7 +41,7 @@ def test_operating_money_and_energy_are_copied_without_rescaling():
     for row in rows.itertuples():
         source = sources[row.source_file]
         stored = source[(source["case"] == row.case) & (source.battery == row.battery)
-                        & (source.operation == "forecast")].iloc[0]
+                        & (source.operation == "forecast_exec")].iloc[0]
         for column in ("ess_charge_mwh", "ess_discharge_mwh", "ess_discharge_revenue_krw",
                        "market_revenue_krw", "solar_direct_revenue_krw", "days"):
             assert getattr(row, column) == stored[column]
@@ -47,7 +54,7 @@ def test_missing_report_keeps_operating_rows_without_inventing_economics(tmp_pat
         copyfile(ROOT / RESULTS / name, target / name)
     rows, report = load_display(tmp_path)
     assert not report
-    assert len(rows) == 183
+    assert len(rows) == 135
     assert rows.npv_krw.isna().all()
     assert rows.needed_annual_support_krw.isna().all()
 
@@ -75,7 +82,7 @@ render(Path({str(ROOT)!r}))
     app.button(key="de_nav_2").click().run()
     assert not app.exception
     assert app.session_state["de_chosen"] == chosen
-    assert any("참여 검토" in m.value for m in app.markdown)
+    assert any('class="de-verdict positive"' in m.value for m in app.markdown)
     app.button(key="de_nav_1").click().run()
     assert app.selectbox(key="_de_battery").value == "new_2025_bnef"
     assert app.selectbox(key="_de_size").value == "3:12"
