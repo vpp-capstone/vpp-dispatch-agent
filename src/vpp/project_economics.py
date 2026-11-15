@@ -5,7 +5,8 @@
 배터리·PCS 교체)을 붙여 20년 현금흐름을 만들고 다음 지표를 낸다.
 
 - NPV, IRR, 단순·할인 회수기간
-- 손익분기 정부지원율, 손익분기 구축비, 필요한 최소 연간 시장수익, 손익분기 PPA 단가
+- 손익분기 정부지원율, 손익분기 구축비, 필요한 최소 연간 시장수익, 손익분기 PPA 단가,
+  NPV를 0으로 만드는 연간 보상 필요액(비증설대안 NWAs 보상 등)
   (VPP가 태양광 소유자에게 kWh당 줄 수 있는 최대 단가. PPA 0원이어도 손해면 nan)
 - 배터리 교체 시점
 
@@ -36,6 +37,9 @@
 |  | market_revenue_krw 에 넣지 않는다 |
 | imbalance_penalty_krw | 임밸런스 페널티 (양수 = 낸 돈) |
 
+``ess_power_mw``, ``ess_energy_mwh`` 열이 있으면 그 행은 그 ESS 용량으로 구축비·지원금을 계산한다
+(용량 비교용, 공고 상한 4MW/20MWh 이내).
+
 시간별 운전 결과(``RollingResult.hourly``)에서 이 행을 만들 때는
 ``operating_row_from_hourly`` 를 쓴다.
 
@@ -62,7 +66,7 @@ from __future__ import annotations
 
 import argparse
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -401,7 +405,14 @@ def evaluate(cfg: EconomicsConfig, battery: Battery, op: Operating, **kw) -> dic
         if not math.isnan(be_scale)
         else float("nan"),
         "breakeven_ppa_krw_per_kwh": be_ppa,
+        "needed_annual_support_krw": needed_annual_support(npv(cf["net"], r), r, cfg.project_years),
     }
+
+
+def needed_annual_support(npv_krw: float, rate: float, years: int) -> float:
+    """NPV 를 0으로 만드는 1~years 년 매년 같은 보상액 (NWAs 보상 등). 이미 흑자면 0."""
+    annuity = sum((1 + rate) ** -t for t in range(1, years + 1))
+    return max(0.0, -npv_krw / annuity)
 
 
 def load_operating(path: str | Path) -> pd.DataFrame:
@@ -451,7 +462,13 @@ def _standard_view(cfg: EconomicsConfig, r: pd.Series, thr: float) -> _View:
 
 def _operating_views(cfg: EconomicsConfig, operating: pd.DataFrame) -> list[_View]:
     """ESS 행마다 관점(total / incremental / standard)별 입력."""
-    base = operating[operating["battery"] == BASELINE_BATTERY].set_index(["case", "operation"])
+    operating = operating.copy()
+    # 용량 비교 행은 case 이름에 용량이 붙는다. 기준선은 line_case(선로 조건)로 짝짓는다.
+    if "line_case" in operating.columns:
+        operating["line_case"] = operating["line_case"].fillna(operating["case"])
+    else:
+        operating["line_case"] = operating["case"]
+    base = operating[operating["battery"] == BASELINE_BATTERY].set_index(["line_case", "operation"])
     if base.index.duplicated().any():
         raise ValueError("같은 case·operation 의 기준선(battery=none) 행이 두 개 이상입니다.")
     breakdown = _has_breakdown(operating)
@@ -462,7 +479,7 @@ def _operating_views(cfg: EconomicsConfig, operating: pd.DataFrame) -> list[_Vie
         cp = r["ess_capacity_payment_krw"] if "ess_capacity_payment_krw" in r.index else nan
         op = Operating(r["market_revenue_krw"], r["solar_to_vpp_mwh"], thr)
         views.append(_View(r, "total", op, cp, r["solar_to_vpp_mwh"], nan, nan))
-        key = (r["case"], r["operation"])
+        key = (r["line_case"], r["operation"])
         if key in base.index:
             b = base.loc[key]
             d_solar = r["solar_to_vpp_mwh"] - b["solar_to_vpp_mwh"]
@@ -471,6 +488,15 @@ def _operating_views(cfg: EconomicsConfig, operating: pd.DataFrame) -> list[_Vie
         if breakdown and cfg.standard_vpp_shares:
             views.append(_standard_view(cfg, r, thr))
     return views
+
+
+def _cfg_for_row(cfg: EconomicsConfig, r: pd.Series) -> EconomicsConfig:
+    """운영 결과 행에 ess_power_mw·ess_energy_mwh 가 있으면 그 용량으로 계산한다 (용량 비교용)."""
+    vals = {}
+    for col, attr in (("ess_power_mw", "ess_power_mw"), ("ess_energy_mwh", "ess_energy_mwh")):
+        if col in r.index and pd.notna(r[col]):
+            vals[attr] = float(r[col])
+    return replace(cfg, **vals) if vals else cfg
 
 
 def summarize(cfg: EconomicsConfig, operating: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -483,6 +509,7 @@ def summarize(cfg: EconomicsConfig, operating: pd.DataFrame) -> tuple[pd.DataFra
     for v in _operating_views(cfg, operating):
         r = v.row
         bat = cfg.batteries[r["battery"]]
+        cfg_r = _cfg_for_row(cfg, r)
         extra = {"include_solar_capex": v.basis == "total"}
         if v.basis == "standard" or cfg.split_mode != "ppa":
             ppas: tuple = (None,)
@@ -498,7 +525,7 @@ def summarize(cfg: EconomicsConfig, operating: pd.DataFrame) -> tuple[pd.DataFra
             for scen, g in cfg.revenue_scenarios.items():
                 for ppa in ppas:
                     kw = {"growth": g, "ppa_krw_per_kwh": 0.0 if ppa is None else ppa, **extra}
-                    m = evaluate(cfg, bat, op, **kw)
+                    m = evaluate(cfg_r, bat, op, **kw)
                     if v.basis == "standard":
                         owner = v.owner_fixed_krw + (v.owner_ess_cp_krw if with_cp else 0.0)
                     else:
@@ -516,17 +543,19 @@ def summarize(cfg: EconomicsConfig, operating: pd.DataFrame) -> tuple[pd.DataFra
                             "annual_market_revenue_krw": op.market_revenue_krw,
                             "annual_solar_to_vpp_mwh": op.solar_to_vpp_mwh,
                             "solar_owner_gain_krw_per_year": owner,
+                            "ess_power_mw": cfg_r.ess_power_mw,
+                            "ess_energy_mwh": cfg_r.ess_energy_mwh,
                             "throughput_cost_krw_per_mwh": bat.throughput_cost_krw_per_mwh(
-                                cfg.ess_energy_mwh, cfg.fx
+                                cfg_r.ess_energy_mwh, cfg.fx
                             ),
                             **m,
                             "decision": "참여 검토" if m["npv_krw"] > 0 else "비참여",
                         }
                     )
                     if scen == "base":
-                        cf = cashflow(cfg, bat, op, **kw).reset_index()
+                        cf = cashflow(cfg_r, bat, op, **kw).reset_index()
                         meta = (
-                            ("ppa_krw_per_kwh", ppa),
+                            ("ppa_krw_per_kwh", float("nan") if ppa is None else ppa),
                             ("ess_capacity_payment", with_cp),
                             ("basis", v.basis),
                             ("operation", r["operation"]),

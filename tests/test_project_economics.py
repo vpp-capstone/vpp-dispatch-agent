@@ -275,3 +275,14 @@ def test_standard_basis_applies_notice_shares():
     # total 관점은 ESS 용량정산금 포함 여부로 두 번 계산된다
     tot = summary[(summary["basis"] == "total") & (summary["revenue_scenario"] == "base")]
     assert set(tot["ess_capacity_payment"]) == {False, True}
+
+
+def test_needed_annual_support_closes_npv_gap():
+    b = CFG.batteries["kr_notice_example"]
+    op = pe.Operating(market_revenue_krw=2e8, solar_to_vpp_mwh=0.0, ess_throughput_mwh=3000.0)
+    m = pe.evaluate(CFG, b, op, ppa_krw_per_kwh=0)
+    assert m["npv_krw"] < 0 < m["needed_annual_support_krw"]
+    boosted = pe.Operating(2e8 + m["needed_annual_support_krw"], 0.0, 3000.0)
+    assert pe.evaluate(CFG, b, boosted, ppa_krw_per_kwh=0)["npv_krw"] == pytest.approx(0, abs=1e3)
+    rich = pe.Operating(market_revenue_krw=30e8, solar_to_vpp_mwh=0.0, ess_throughput_mwh=3000.0)
+    assert pe.evaluate(CFG, b, rich, ppa_krw_per_kwh=0)["needed_annual_support_krw"] == 0.0
