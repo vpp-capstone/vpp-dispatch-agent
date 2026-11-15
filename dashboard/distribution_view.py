@@ -74,7 +74,7 @@ def _line_screen(rows):
                        lambda k: "낮 시간 고정 상한" if k == "cap" else "발전량에 따른 동적 상한")
         lines = sorted(rows.loc[rows.line_case.str.startswith(kind + "_"), "line_case"].unique())
         line = _choice("선로 여유", lines, "de_line", line_label)
-        _facts([("모집 태양광", "5.7 MW"), ("결과 기준", "2025 제주 · SMP 예측 운전"),
+        _facts([("모집 태양광", "5.7 MW"), ("결과 기준", "2025 제주 · 발전량 예측 → 실행 → 정산"),
                 ("참여 판단 관점", "표준 수익 배분 · VPP")])
     with right:
         st.markdown("#### 이 선로의 운전 조건")
@@ -159,7 +159,9 @@ def _decision_screen(rows):
                 f'<h3>{verdict}</h3><p>{detail}</p></div>', unsafe_allow_html=True)
     _metrics([("20년 NPV", _money(row.npv_krw), "투자·지원·유지·교체비 반영 · 보고값"),
               ("ESS 방전 매출 / 년", _money(row.ess_discharge_revenue_krw), "비용 차감 전 · 운영 CSV"),
-              ("추가 연간 보상 필요액", _money(row.needed_annual_support_krw, digits=2), "NPV 0 기준 · 보고값이 있을 때만")])
+              ("추가 연간 보상 필요액",
+               "필요 없음" if positive else _money(row.needed_annual_support_krw, digits=2),
+               "NPV가 양수라 보상 없이도 흑자" if positive else "NPV 0 기준 · 보고값이 있을 때만")])
     left, right = st.columns(2, gap="large")
     with left:
         st.markdown("#### 저장된 운전 결과")
@@ -172,7 +174,7 @@ def _decision_screen(rows):
         _facts([("대상 선로·허용범위", "실제 한전 자료 확인 필요"),
                 ("설비 비용", "국내 견적·보증 조건 확인 필요"),
                 ("정산·배분", "계약상 귀속 조건 확인 필요"),
-                ("예측 오차·페널티", "이 결과에는 발전량 예측 오차 미반영")])
+                ("예측 오차·페널티", "1시간 근사로 반영 · 15분 정산 확인 필요")])
     peers = rows[(rows.battery == row.battery) & (rows.ess_power_mw == row.ess_power_mw)
                  & (rows.ess_energy_mwh == row.ess_energy_mwh)].sort_values("line_case")
     with st.expander("같은 설비를 다른 선로에서도 비교"):
@@ -214,7 +216,8 @@ def render(root: Path):
         (_line_screen, _equipment_screen, _decision_screen)[st.session_state.de_step](rows)
         with st.expander("조회 기준과 원본 결과"):
             st.write("운영 수치는 기존 CSV, NPV와 보상 필요액은 기존 결과 보고서의 표를 표시합니다. "
-                     "사업성은 기준 시나리오·SMP 예측 운전·표준 수익 배분·ESS 용량정산금 제외 기준입니다. "
+                     "사업성은 기준 시나리오·발전량 예측 → 실행 → 정산·표준 수익 배분·"
+                     "ESS 용량정산금 제외 기준입니다. "
                      "할인율 7%, 20년, 구축비 50% 지원 가정이며 NPV는 보고서의 반올림 정밀도를 유지합니다.")
             st.caption("선택과 필터는 이 화면에만 적용됩니다. 운영 설정·계산 결과·현재 포트폴리오 선택은 바뀌지 않습니다.")
             for name, label in ((OPERATING, "운영 결과 CSV"), (SIZING, "용량 비교 CSV")):
