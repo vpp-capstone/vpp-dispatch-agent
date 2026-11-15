@@ -3,7 +3,8 @@
 실행 쪽(``distribution_scenario``)과 사업성 쪽(``project_economics``)을 잇는다.
 
     python -m vpp.distribution_backtest \
-        --solar <시간별 태양광 CSV> --forecast <SMP v6 예측 CSV> \
+        --generation <발전량 예측 평가 parquet> --fcr <예비력 가격 CSV> \
+        --forecast <SMP v6 예측 CSV> \
         --start 2025-01-01 --end 2025-12-31 \
         --out docs/results/distribution_ess_operating_<날짜>.csv
 
@@ -13,7 +14,12 @@
   어느 쪽이든 확정한 판매량은 실제 SMP로 정산한다.
 - 판매 1MWh 가치 = SMP + REC 가산(``config/rec_v0_monthly.yaml``).
   표 밖의 달은 표의 처음·마지막 달 값을 쓴다.
-- 발전량은 실측을 그대로 쓴다 (발전량 예측 오차·임밸런스 페널티는 아직 넣지 않는다).
+- ``forecast``·``perfect`` 는 발전량을 실측 그대로 안다고 본다 (예측 오차·페널티 없음).
+- ``forecast_exec`` (``--generation`` 필요): 발전량 예측 + SMP v6 예측으로 하루 전 계획 →
+  실측 발전량으로 실행 운전(``vpp.execution``, 확정 판매량 우선, 초과 판매 없음) →
+  하루전·실시간 이중가격 정산과 임밸런스 페널티(``vpp.hourly_settlement``).
+  급전지시량 = 확정 판매량, 공급가능용량 = 확정 판매량(감발 지시 없음)으로 가정한다.
+  FCR 가격이 없는 시간은 있는 자료의 시간대별 평균으로 채운다.
 - 선로 상한(새 태양광+ESS가 선로로 내보낼 수 있는 MW):
   - ``fixed``: 낮(08~18시)에만 c MW, 밤은 제한 없음
   - ``dynamic``: c + 기존 태양광 MW x (1 - 일사 비율). 해가 가장 강할 때 c MW.
@@ -38,14 +44,22 @@ import pandas as pd
 
 from vpp import project_economics as pe
 from vpp.distribution_scenario import attach_line_export_cap
+from vpp.execution import RuleBasedPolicy, execute_plan
+from vpp.hourly_settlement import settle_hourly
 from vpp.optimization import EssParams, solve_window
 from vpp.rec import RecParams
+from vpp.settlement_inputs import HourlySettlementParams
 
 DAY_HOURS = (8, 18)  # fixed 상한이 걸리는 시간 [시작, 끝)
 SOLAR_EFCR = 0.0384  # 태양광 용량정산 실효용량 비율
 ESS_EFCR = 0.6563  # 4시간 ESS 실효용량 비율
 JEJU_RCP_KRW_PER_KWH_H = 22.05
 BASELINE = pe.BASELINE_BATTERY
+EXEC = "forecast_exec"
+OPERATIONS = ("forecast", "perfect", EXEC)
+# 선로 상한을 넘지 않도록 실행 중 초과 판매는 하지 않는다 (남는 전력은 충전 또는 감축)
+EXEC_POLICY = RuleBasedPolicy(surplus_order=("reduce_discharge", "charge", "curtail"))
+DISPATCH_NOTE = "급전지시량 = 하루전 확정 판매량, 공급가능용량 = 확정 판매량 (감발 지시 없음 가정)"
 
 
 @dataclass(frozen=True)
@@ -104,9 +118,73 @@ def ess_for(base: EssParams, cfg: pe.EconomicsConfig, battery: pe.Battery, case:
 class Inputs:
     """시간별 입력. 가격은 모두 원/MWh."""
 
-    hourly: pd.DataFrame  # index ts: solar_mwh, smp_krw_per_mwh, rec_krw_per_mwh
+    hourly: pd.DataFrame  # index ts: solar_mwh, smp_krw_per_mwh, rec_krw_per_mwh[, smp_rt, fcr]
     forecast: dict[str, np.ndarray]  # 발행일(YYYY-MM-DD) -> 다음 날 0시부터 48시간 예측
     solar_capacity_mw: float
+    # 계획일(YYYY-MM-DD) -> 그날 0시부터 48시간 발전량 예측 (MWh, 5.7MW 환산)
+    generation_forecast: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)
+    notes: dict = dataclasses.field(default_factory=dict)
+
+
+def load_generation(path: str | Path, target_mw: float) -> tuple[pd.Series, dict, float]:
+    """발전량 예측 평가 파일 → (실측, 계획일별 예측, 원본 MW).
+
+    파일: 발전량 예측 ``artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet``.
+
+    자원별 행을 합쳐 포트폴리오 합계로 만들고 target_mw / 원본 설비용량 비율로 환산한다.
+    실측은 계획 당일(forecast_day_offset=0) 행에서 시간마다 한 번만 쓴다.
+    """
+    d = pd.read_parquet(path)
+    need = {"asset_id", "capacity_kw", "planning_day_kst", "valid_time_kst",
+            "forecast_day_offset", "improved_generation_kwh", "generation_kwh"}  # fmt: skip
+    missing = sorted(need - set(d.columns))
+    if missing:
+        raise ValueError(f"발전량 예측 파일에 열이 없습니다: {missing}")
+    if "available_before_bid_deadline" in d and not d["available_before_bid_deadline"].all():
+        d = d[d["available_before_bid_deadline"]]
+    source_mw = float(d.groupby("asset_id")["capacity_kw"].first().sum()) / 1000.0
+    k = target_mw / source_mw
+    d = d.assign(t=pd.to_datetime(d["valid_time_kst"]).dt.tz_localize(None))
+    same_day = d[d["forecast_day_offset"] == 0]
+    actual = same_day.groupby("t")["generation_kwh"].sum(min_count=1) / 1000.0 * k
+    fc = {}
+    for day, g in d.groupby("planning_day_kst"):
+        s = g.groupby("t")["improved_generation_kwh"].sum().sort_index()
+        if len(s) == 48:
+            fc[str(day)] = s.to_numpy(float) / 1000.0 * k
+    return actual.clip(lower=0.0), fc, source_mw
+
+
+def load_fcr_csv(paths: Iterable[str | Path]) -> pd.Series:
+    """KPX 예비력 가격 → 주파수제어예비력 시간 평균 (원/kWh). 두 형식을 받는다.
+
+    - 공공데이터포털 15145101 원본 CSV (거래일자, 예비력 구분, 01시_1 ~ 24시_4):
+      01시_1~4 구간 → 00:00. 네 구간 중 하나라도 없으면 그 시간은 결측.
+    - ``python -m vpp.market.reserve_prices`` 가 만든 시간 CSV (ts, fcr_price_krw_per_kwh).
+      원본 엑셀(실시간예비력가격_*.xlsx)은 그 명령으로 먼저 변환한다.
+    겹치는 시각은 뒤에 준 파일 값을 쓴다.
+    """
+    parts = []
+    for path in paths:
+        raw = pd.read_csv(path, encoding="utf-8-sig")
+        if {"ts", "fcr_price_krw_per_kwh"} <= set(raw.columns):
+            ts = _naive(raw["ts"])
+            vals = raw["fcr_price_krw_per_kwh"].astype(float).to_numpy()
+            parts.append(pd.Series(vals, index=pd.DatetimeIndex(ts)))
+            continue
+        raw = raw[raw.iloc[:, 1].astype(str).str.strip() == "주파수제어예비력"]
+        cols = [c for c in raw.columns if "시_" in str(c)]
+        if len(cols) != 96:
+            raise ValueError(f"예비력 CSV는 96구간 열이 필요합니다: {path}")
+        v = raw[cols].to_numpy(float).reshape(len(raw), 24, 4)
+        hourly = v.mean(axis=2)  # 하나라도 NaN 이면 NaN
+        days = pd.to_datetime(raw.iloc[:, 0].astype(str))
+        ts = [day + pd.Timedelta(hours=h) for day in days for h in range(24)]
+        parts.append(pd.Series(hourly.ravel(), index=pd.DatetimeIndex(ts)))
+    if not parts:
+        raise ValueError("FCR 파일이 없습니다.")
+    out = pd.concat(parts).sort_index()
+    return out[~out.index.duplicated(keep="last")].rename("fcr_price_krw_per_kwh")
 
 
 def _naive(ts: pd.Series) -> pd.Series:
@@ -123,19 +201,42 @@ def load_inputs(
     solar_col: str = "solar_traded_mwh",
     solar_capacity_mw: float = 5.7,
     scale_year: str = "2025",
+    generation_path: str | Path | None = None,
+    fcr_paths: Iterable[str | Path] = (),
 ) -> Inputs:
-    """태양광은 scale_year 최대값이 solar_capacity_mw 가 되도록 비례 환산한다."""
-    sol = pd.read_csv(solar_path)
-    sol["ts"] = _naive(sol["ts"])
-    s = sol.set_index("ts")[solar_col].astype(float)
-    peak = s[scale_year].max()
-    if not peak > 0:
-        raise ValueError(f"{scale_year}년 태양광 최대값이 0입니다.")
-    s = (s / peak * solar_capacity_mw).clip(lower=0.0)
+    """태양광 실측은 두 가지 중 하나.
+
+    - generation_path 가 있으면 포트폴리오 실측(발전량 예측 평가 파일)을 5.7MW로 비례 환산
+    - 없으면 solar_path 의 scale_year 최대값이 solar_capacity_mw 가 되도록 비례 환산
+    """
+    notes: dict = {}
+    gen_fc: dict[str, np.ndarray] = {}
+    if generation_path is not None:
+        s, gen_fc, src_mw = load_generation(generation_path, solar_capacity_mw)
+        notes["solar_source"] = f"portfolio {src_mw:.3f}MW -> {solar_capacity_mw}MW"
+    else:
+        sol = pd.read_csv(solar_path)
+        sol["ts"] = _naive(sol["ts"])
+        s = sol.set_index("ts")[solar_col].astype(float)
+        peak = s[scale_year].max()
+        if not peak > 0:
+            raise ValueError(f"{scale_year}년 태양광 최대값이 0입니다.")
+        s = (s / peak * solar_capacity_mw).clip(lower=0.0)
+        notes["solar_source"] = f"{Path(solar_path).name} {scale_year} max -> {solar_capacity_mw}MW"
     mk = pd.read_csv(market_path)
     mk["ts"] = _naive(mk["ts"])
-    smp = mk.set_index("ts")["smp_da"].astype(float) * 1000.0
-    hourly = pd.DataFrame({"solar_mwh": s}).join(smp.rename("smp_krw_per_mwh"), how="outer")
+    mk = mk.set_index("ts")
+    hourly = pd.DataFrame({"solar_mwh": s}).join(
+        pd.DataFrame(
+            {
+                "smp_krw_per_mwh": mk["smp_da"].astype(float) * 1000.0,
+                "smp_rt_krw_per_mwh": mk["smp_rt_mean"].astype(float) * 1000.0
+                if "smp_rt_mean" in mk
+                else np.nan,
+            }
+        ),
+        how="outer",
+    )
     hourly = hourly[~hourly.index.duplicated()].sort_index()
     rec = RecParams.from_yaml(rec_config)
     months = (
@@ -157,7 +258,16 @@ def load_inputs(
             g = g.sort_values("t")
             if len(g) == 48:
                 fc[str(d)] = g[col].to_numpy(float) * scale
-    return Inputs(hourly, fc, solar_capacity_mw)
+    fcr_paths = list(fcr_paths)
+    if fcr_paths:
+        fcr = load_fcr_csv(fcr_paths).reindex(hourly.index)
+        have = fcr.notna()
+        by_hour = fcr.groupby(fcr.index.hour).mean()
+        filled = fcr.fillna(pd.Series(fcr.index.hour.map(by_hour), index=fcr.index))
+        hourly["fcr_price_krw_per_kwh"] = filled
+        hourly["fcr_observed"] = have
+        notes["fcr"] = "observed where available, else hour-of-day mean of observed"
+    return Inputs(hourly, fc, solar_capacity_mw, gen_fc, notes)
 
 
 def run_case(
@@ -169,9 +279,15 @@ def run_case(
     operation: str,
     days: Iterable[pd.Timestamp],
 ) -> pd.DataFrame:
-    """확정 24시간씩 이어 붙인 시간별 결과 (operating_row_from_hourly 입력 형식)."""
-    if operation not in ("forecast", "perfect"):
-        raise ValueError("operation 은 forecast 또는 perfect 입니다.")
+    """확정 24시간씩 이어 붙인 시간별 결과.
+
+    forecast/perfect: operating_row_from_hourly 입력 형식.
+    forecast_exec: 실행 운전 결과 (committed_sell_mwh, supply_mwh, charge/discharge 등).
+    """
+    if operation not in OPERATIONS:
+        raise ValueError(f"operation 은 {OPERATIONS} 중 하나입니다.")
+    if operation == EXEC:
+        return _run_exec(inputs, cfg, base_ess, case, battery_key, days)
     h = inputs.hourly
     ess = None
     energy = 0.0
@@ -231,6 +347,187 @@ def run_case(
     return pd.concat(parts, ignore_index=True)
 
 
+def _run_exec(
+    inputs: Inputs,
+    cfg: pe.EconomicsConfig,
+    base_ess: EssParams,
+    case: LineCase,
+    battery_key: str,
+    days: Iterable[pd.Timestamp],
+) -> pd.DataFrame:
+    """발전량·SMP 예측으로 계획 → 실측 발전량으로 실행 운전."""
+    if not inputs.generation_forecast:
+        raise ValueError("forecast_exec 에는 발전량 예측(--generation)이 필요합니다.")
+    h = inputs.hourly
+    ess = None
+    energy = 0.0
+    if battery_key != BASELINE:
+        ess = ess_for(base_ess, cfg, cfg.batteries[battery_key], case)
+        energy = ess.initial_energy_mwh
+    parts = []
+    for d in days:
+        idx = pd.date_range(d, periods=48, freq="h")
+        w = h.reindex(idx)
+        act = w["smp_krw_per_mwh"].to_numpy(float)
+        actual_gen = w["solar_mwh"].to_numpy(float)[:24]
+        smp_key = (d - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        gen_key = d.strftime("%Y-%m-%d")
+        if (
+            np.isnan(act[:24]).any()
+            or np.isnan(actual_gen).any()
+            or smp_key not in inputs.forecast
+            or gen_key not in inputs.generation_forecast
+        ):
+            continue
+        plan = inputs.forecast[smp_key].copy()
+        plan = np.where(np.isnan(plan), np.nanmean(plan), plan)
+        gen_fc = inputs.generation_forecast[gen_key]
+        rec = w["rec_krw_per_mwh"].ffill().bfill().to_numpy(float)
+        # 한전도 D-1 예측으로 허용범위를 낸다고 보고, 동적 상한은 발전량 예측으로 계산
+        cap = line_cap_mw(case, idx, gen_fc, inputs.solar_capacity_mw).astype(float)
+        if ess is None:
+            sell = np.where(plan[:24] + rec[:24] > 0, np.minimum(gen_fc[:24], cap[:24]), 0.0)
+            supply = np.minimum(actual_gen, sell)  # 약속보다 많이는 팔지 않는다
+            ex = pd.DataFrame(
+                {
+                    "committed_sell_mwh": sell,
+                    "supply_mwh": supply,
+                    "charge_mwh": 0.0,
+                    "discharge_mwh": 0.0,
+                    "actual_generation_mwh": actual_gen,
+                    "forecast_generation_mwh": gen_fc[:24],
+                    "shortfall_mwh": np.maximum(sell - actual_gen, 0.0),
+                    "curtailment_mwh": np.maximum(actual_gen - sell, 0.0),
+                }
+            )
+        else:
+            res = solve_window(
+                gen_fc, plan, np.ones(48), ess, energy, export_cap_mwh=cap, rec_krw_per_mwh=rec
+            )
+            committed = pd.DataFrame(
+                {
+                    "ts": idx[:24],
+                    "sell_mwh": res.sell_mwh[:24],
+                    "charge_mwh": res.charge_mwh[:24],
+                    "discharge_mwh": res.discharge_mwh[:24],
+                    "price_krw_per_mwh": plan[:24],
+                    "rec_krw_per_mwh": rec[:24],
+                    "generation_mwh": gen_fc[:24],
+                    "energy_end_mwh": res.energy_end_mwh[:24],
+                }
+            )
+            out = execute_plan(committed, actual_gen, energy, ess, EXEC_POLICY)
+            energy = out.energy_end_mwh
+            ex = out.hourly.drop(columns=["ts", "rec_krw_per_mwh"])
+        ex.insert(0, "ts", idx[:24])
+        ex["price_krw_per_mwh"] = act[:24]
+        ex["realtime_price_krw_per_mwh"] = w["smp_rt_krw_per_mwh"].to_numpy(float)[:24]
+        ex["rec_krw_per_mwh"] = rec[:24]
+        if "fcr_price_krw_per_kwh" in w:
+            ex["fcr_price_krw_per_kwh"] = w["fcr_price_krw_per_kwh"].to_numpy(float)[:24]
+        parts.append(ex)
+    if not parts:
+        raise ValueError(f"계산할 날이 없습니다: {case.name} {battery_key} {EXEC}")
+    return pd.concat(parts, ignore_index=True)
+
+
+def settle_exec(hourly: pd.DataFrame, ess: EssParams, resource_capacity_mw: float) -> pd.DataFrame:
+    """실행 운전 결과를 하루전·실시간 이중가격 + 임밸런스 페널티로 정산한다.
+
+    정산 규칙은 vpp.hourly_settlement (2026-04 시행 별표33, 허용오차 6% / 1.5%).
+    """
+    ts = pd.DatetimeIndex(hourly["ts"]).tz_localize("Asia/Seoul")
+    execution = pd.DataFrame(
+        {
+            "ts": ts,
+            "dt_hours": 1.0,
+            "committed_sell_mwh": np.maximum(hourly["committed_sell_mwh"].to_numpy(float), 0.0),
+            "supply_mwh": np.maximum(hourly["supply_mwh"].to_numpy(float), 0.0),
+            "charge_mwh": np.maximum(hourly["charge_mwh"].to_numpy(float), 0.0),
+            "discharge_mwh": np.maximum(hourly["discharge_mwh"].to_numpy(float), 0.0),
+            "rec_krw_per_mwh": hourly["rec_krw_per_mwh"].to_numpy(float),
+        }
+    )
+    market = pd.DataFrame(
+        {
+            "ts": ts,
+            "smp_da": hourly["price_krw_per_mwh"].to_numpy(float) / 1000.0,
+            "smp_rt_mean": hourly["realtime_price_krw_per_mwh"].to_numpy(float) / 1000.0,
+        }
+    )
+    # MILP 해의 -1e-12 같은 수치 오차를 0으로 (정산 입력은 음수를 받지 않는다)
+    committed_mw = np.maximum(hourly["committed_sell_mwh"].to_numpy(float), 0.0)  # dt = 1h
+    fcr = (
+        hourly["fcr_price_krw_per_kwh"].to_numpy(float)
+        if "fcr_price_krw_per_kwh" in hourly
+        else np.full(len(hourly), np.nan)
+    )
+    dispatch = pd.DataFrame(
+        {
+            "ts": ts,
+            "resource_capacity_mw": resource_capacity_mw,
+            "set_point_mw": committed_mw,
+            "available_capacity_mw": committed_mw,
+            "fcr_price_krw_per_kwh": fcr,
+            "min_offer_price_krw_per_kwh": np.nan,
+            "offer_floor_krw_per_kwh": np.nan,
+            "dispatch_source": "scenario",
+            "dispatch_note": DISPATCH_NOTE,
+        }
+    )
+    params = HourlySettlementParams(resource_id="distribution_ess_v0")
+    return settle_hourly(execution, market, ess, params=params, dispatch=dispatch)
+
+
+def operating_row_from_settlement(
+    settled: pd.DataFrame,
+    *,
+    case: str,
+    battery: str,
+    operation: str,
+    solar_capacity_credit_mw: float,
+    ess_capacity_credit_mw: float,
+    rcp_krw_per_kwh_h: float,
+) -> dict:
+    """정산 결과 → 운영 결과 행. 열화비(wear)는 빼지 않는다.
+
+    시간마다 (하루전 확정분 + 실시간 편차분) 에너지 수익과 REC를 실제 공급량 중 방전 비율로
+    태양광 몫과 ESS 몫으로 나눈다. 페널티는 따로 둔다 (표준 배분에서 VPP 100%).
+    """
+    supply = settled["supply_mwh"].to_numpy(float)
+    dis = np.minimum(settled["discharge_mwh"].to_numpy(float), supply)
+    share = np.divide(dis, supply, out=np.zeros_like(supply), where=supply > 1e-12)
+    value = settled["energy_revenue_krw"].to_numpy(float) + settled["rec_krw"].to_numpy(float)
+    direct = supply - dis
+    to_krw = 1000.0 * rcp_krw_per_kwh_h
+    penalty = settled["imbalance_penalty_krw"].to_numpy(float)
+    solar_rev = float(np.nansum(value * (1 - share)))
+    ess_rev = float(np.nansum(value * share))
+    solar_cp = float(np.minimum(direct, solar_capacity_credit_mw).sum() * to_krw)
+    ess_cp = float(np.minimum(dis, ess_capacity_credit_mw).sum() * to_krw)
+    pen = float(np.nansum(penalty))
+    ch = settled["charge_mwh"].to_numpy(float)
+    return {
+        "case": case,
+        "battery": battery,
+        "operation": operation,
+        "market_revenue_krw": solar_rev + ess_rev + solar_cp - pen,
+        "solar_to_vpp_mwh": float(direct.sum() + ch.sum()),
+        "ess_charge_mwh": float(ch.sum()),
+        "ess_discharge_mwh": float(settled["discharge_mwh"].sum()),
+        "days": int(pd.to_datetime(settled["ts"]).dt.date.nunique()),
+        "solar_direct_revenue_krw": solar_rev,
+        "ess_discharge_revenue_krw": ess_rev,
+        "solar_capacity_payment_krw": solar_cp,
+        "ess_capacity_payment_krw": ess_cp,
+        "imbalance_penalty_krw": pen,
+        "deviation_krw": float(np.nansum(settled["deviation_krw"])),
+        "shortfall_mwh": float(np.maximum(-settled["sales_deviation_mwh"], 0).sum()),
+        "penalized_mwh": float(np.nansum(settled["penalized_mwh"])),
+        "penalty_missing_hours": int(np.isnan(penalty).sum()),
+    }
+
+
 def operating_row(
     inputs: Inputs,
     cfg: pe.EconomicsConfig,
@@ -244,15 +541,24 @@ def operating_row(
     hourly = run_case(inputs, cfg, base_ess, case, battery_key, operation, days)
     power = cfg.ess_power_mw if case.ess_power_mw is None else case.ess_power_mw
     energy = cfg.ess_energy_mwh if case.ess_energy_mwh is None else case.ess_energy_mwh
-    row = pe.operating_row_from_hourly(
-        hourly,
-        case=case.name,
-        battery=battery_key,
-        operation=operation,
-        solar_capacity_credit_mw=inputs.solar_capacity_mw * SOLAR_EFCR,
-        ess_capacity_credit_mw=0.0 if battery_key == BASELINE else power * ESS_EFCR,
-        rcp_krw_per_kwh_h=rcp_krw_per_kwh_h,
-    )
+    kw = {
+        "case": case.name,
+        "battery": battery_key,
+        "operation": operation,
+        "solar_capacity_credit_mw": inputs.solar_capacity_mw * SOLAR_EFCR,
+        "ess_capacity_credit_mw": 0.0 if battery_key == BASELINE else power * ESS_EFCR,
+        "rcp_krw_per_kwh_h": rcp_krw_per_kwh_h,
+    }
+    if operation == EXEC:
+        ess = (
+            base_ess
+            if battery_key == BASELINE
+            else ess_for(base_ess, cfg, cfg.batteries[battery_key], case)
+        )
+        settled = settle_exec(hourly, ess, inputs.solar_capacity_mw)
+        row = operating_row_from_settlement(settled, **kw)
+    else:
+        row = pe.operating_row_from_hourly(hourly, **kw)
     row["line_case"] = dataclasses.replace(case, ess_power_mw=None, ess_energy_mwh=None).name
     if case.ess_power_mw is not None:
         row["ess_power_mw"] = power
@@ -339,7 +645,13 @@ def build_jobs(
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="배전망 ESS 1년 운영 백테스트 → 운영 결과 CSV")
-    p.add_argument("--solar", required=True, help="시간별 태양광 CSV (ts, solar_traded_mwh)")
+    p.add_argument("--solar", help="시간별 태양광 CSV (ts, solar_traded_mwh). --generation 없을 때")
+    p.add_argument(
+        "--generation",
+        help="발전량 예측 평가 parquet (solar_improved_2025_with_actual). 주면 이 실측을 쓰고 "
+        "forecast_exec 운전을 할 수 있다",
+    )
+    p.add_argument("--fcr", nargs="*", default=[], help="KPX 예비력 가격 CSV (여러 개 가능)")
     p.add_argument("--solar-col", default="solar_traded_mwh")
     p.add_argument("--market", default="data/processed/market/market_hourly.csv")
     p.add_argument("--forecast", help="SMP v6 예측 CSV (smp_forecast 출력). 없으면 perfect 만")
@@ -349,7 +661,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--start", default="2025-01-01")
     p.add_argument("--end", default="2025-12-31")
     p.add_argument("--batteries", help="쉼표 구분 (기본: 설정의 모든 배터리)")
-    p.add_argument("--operations", default="forecast,perfect")
+    p.add_argument("--operations", help="쉼표 구분. 기본: forecast,perfect (+forecast_exec)")
     p.add_argument("--fixed-caps", default="1.5,1.75,2.0,2.25,2.5,2.75,3.0,3.25,3.5,3.75,4.0")
     p.add_argument("--dynamic-caps", default="1.0,1.5,2.0,2.5")
     p.add_argument("--existing-pv-mw", type=float, default=5.0)
@@ -360,10 +672,22 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg = pe.EconomicsConfig.from_yaml(a.economics_config)
     base_ess = EssParams.from_yaml(a.ess_config)
+    if a.solar is None and a.generation is None:
+        raise SystemExit("--solar 또는 --generation 중 하나가 필요합니다.")
     inputs = load_inputs(
-        a.solar, a.market, a.forecast, a.rec, solar_col=a.solar_col, solar_capacity_mw=cfg.solar_mw
+        a.solar,
+        a.market,
+        a.forecast,
+        a.rec,
+        solar_col=a.solar_col,
+        solar_capacity_mw=cfg.solar_mw,
+        generation_path=a.generation,
+        fcr_paths=a.fcr,
     )
-    ops = [o for o in a.operations.split(",") if o]
+    default_ops = "forecast,perfect" + (f",{EXEC}" if a.generation else "")
+    ops = [o for o in (a.operations or default_ops).split(",") if o]
+    if EXEC in ops and not inputs.generation_forecast:
+        raise SystemExit("forecast_exec 에는 --generation 이 필요합니다.")
     if "forecast" in ops and not inputs.forecast:
         raise SystemExit("--forecast 없이 forecast 운전은 할 수 없습니다.")
     sizes = None

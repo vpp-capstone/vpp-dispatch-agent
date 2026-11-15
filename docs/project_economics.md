@@ -19,17 +19,37 @@ vpp.distribution_backtest (1년, 날마다 48시간 MILP)    설정 (config/proj
 
 ## 실행
 
-1단계: 1년 운영 백테스트 → 운영 결과 CSV (`vpp.distribution_backtest`, 2코어 기준 약 10분)
+1단계: 1년 운영 백테스트 → 운영 결과 CSV (`vpp.distribution_backtest`, 2코어 기준 약 30분)
 
 ```bash
 python -m vpp.distribution_backtest \
-  --solar <시간별 태양광 CSV: ts, solar_traded_mwh> \
+  --generation <발전량 예측 평가 파일: artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet> \
+  --fcr data/processed/market/fcr_hourly.csv <KPX 예비력 원본 CSV ...> \
   --forecast <SMP v6 예측 CSV: python -m vpp.smp_forecast 출력> \
   --start 2025-01-01 --end 2025-12-31 \
   --out docs/results/distribution_ess_operating_20261115.csv
 ```
 
-- 기본: 설정의 모든 배터리 x 고정 상한 1.5~4.0MW(0.25 간격) + 동적 상한 1.0~2.5MW x 예측·정답 운전.
+- FCR(`--fcr`, 여러 개): 공공데이터포털 15145101 원본 CSV 또는 `python -m vpp.market.reserve_prices`
+  로 원본 엑셀(실시간예비력가격_*.xlsx)을 변환한 시간 CSV(ts, fcr_price_krw_per_kwh). 겹치면 뒤 파일 우선.
+  2025년 결과는 `실시간예비력가격_20240601~20250720.xlsx`(변환) + `실시간예비력가격_..._20260630.csv` 로
+  1년 전체를 관측값으로 채웠다.
+- 태양광: `--generation` 의 포트폴리오 실측(18개소 14.08MW)을 5.7MW로 비례 환산한다
+  (`distribution_scenario.scale_solar_to_capacity` 와 같은 비율). 발전량 예측이 없으면
+  `--solar <ts, solar_traded_mwh CSV>` 로 KPX 거래량 패턴을 쓸 수 있다 (이때 `forecast_exec` 없음).
+- 운전 방식 (`operation`)
+
+  | operation | 계획 | 실행·정산 |
+  | --- | --- | --- |
+  | `perfect` | 정답 SMP, 실측 발전량 | 계획 그대로, 실제 SMP |
+  | `forecast` | SMP v6 예측, 실측 발전량 | 계획 그대로, 실제 SMP |
+  | `forecast_exec` | SMP v6 예측, **발전량 예측** | 실측 발전량으로 실행 운전(`vpp.execution`) → 하루전·실시간 이중가격 + 임밸런스 페널티(`vpp.hourly_settlement`) |
+
+  `forecast_exec` 가정: 실행 중 초과 판매 없음(남는 전력은 충전 또는 감축, 선로 상한 유지),
+  급전지시량 = 하루전 확정 판매량, 공급가능용량 = 확정 판매량(감발 지시 없음), 자원 설비용량 5.7MW.
+  FCR 가격이 없는 시간은 있는 자료의 시간대별 평균으로 채운다. 결과 행에 `deviation_krw`(실시간 편차 정산),
+  `shortfall_mwh`, `penalized_mwh`, `imbalance_penalty_krw` 가 붙는다.
+- 기본: 설정의 모든 배터리 x 고정 상한 1.5~4.0MW(0.25 간격) + 동적 상한 1.0~2.5MW x 운전 방식 3개.
   `--batteries`, `--fixed-caps`, `--dynamic-caps`, `--existing-pv-mw`, `--operations` 로 바꾼다.
 - ESS 용량 비교: `--sizes 2:8,3:12,4:20` (MW:MWh). 행에 `ess_power_mw`·`ess_energy_mwh` 가 붙고
   사업성 계산이 그 용량으로 구축비·지원금을 잡는다.
@@ -179,7 +199,11 @@ IRR은 NPV를 0으로 만드는 $r$. 손익분기 값은 다른 입력은 그대
 ## 한계 (v0)
 
 - 한전이 주는 시간별 허용범위 대신 고정 상한(낮 8~18시)과 가정한 동적 상한을 쓴다.
-- 발전량은 실측을 그대로 써서 발전량 예측 오차와 임밸런스 페널티가 0이다.
+- 발전량 예측 오차와 페널티는 `forecast_exec` 에만 있다. 실행 규칙은 판매 약속 우선 규칙
+  (`vpp.execution.RuleBasedPolicy`)이라 수익 최적 운전이 아니다.
+- 급전지시량·공급가능용량은 실제 급전 기록이 없어 확정 판매량으로 가정했다. 감발 지시(1.5% 허용오차)
+  상황은 실시간 가격이 0 이하인 시간에만 생긴다.
+- FCR 가격이 없는 시간은 관측분의 시간대별 평균으로 채운다 (2025년은 전부 관측값).
 - ESS 용량정산금 실효용량은 용량과 관계없이 4시간 ESS 비율(65.63%)을 쓴다.
 - 우리 시장 데이터(SMP, REC, RCP)는 제주인데 공고 대상 선로는 모두 육지다. 육지 선로에 쓰려면 육지
   가격만 바꿔 넣으면 된다.
