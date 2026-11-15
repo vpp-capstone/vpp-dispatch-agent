@@ -1,0 +1,14 @@
+# 1단계 독립 사후 정산 설정. python -m vpp.hourly_settlement --help
+# 하나의 급전가능 재생에너지 자원을 모델링하는 시간 단위 근사.
+# 여러 등록 자원의 편차를 합쳐 상계하지 말고 자원별로 실행한다.
+resource_id: modeled_renewable
+rule_version: jeju_2026_04  # 2026-04-01 시행. 이전 기간은 현행 규칙의 가상 적용으로 표시.
+day_ahead_loss_factor: 1.0
+realtime_loss_factor: 1.0
+loss_factor_source: assumption
+loss_factor_note: 자원별 손실계수 미연결로 1 가정; smp_da와 smp_rt_mean은 원/kWh 입력
+rec_mode: supplied_mwh_once  # 기존 실행 CSV의 rec_krw_per_mwh를 재사용. 없으면 오류.
+# REC를 의도적으로 제외할 때만 excluded 지정. 월별 REC도 기존 실행 열을 그대로 사용한다.
+# 발전설비 용량, 급전 목표, 변경 공급가능용량, 입찰 단가는 --dispatch CSV에서 받는다.
+# 시장 공통 FCR 가격은 --fcr CSV로 별도 연결한다. 기존 예제의 dispatch 내 FCR도 지원한다.
+# 결측을 0으로 채우거나 급전 목표를 committed_sell_mwh로 자동 대체하지 않는다.

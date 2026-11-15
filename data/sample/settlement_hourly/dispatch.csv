@@ -1,0 +1,8 @@
+ts,resource_capacity_mw,set_point_mw,available_capacity_mw,fcr_price_krw_per_kwh,min_offer_price_krw_per_kwh,offer_floor_krw_per_kwh,dispatch_source,dispatch_note
+2024-06-01 00:00:00,10,8,8,5,-10,-80,scenario,검산용 합성 자료; 실제 급전 입찰 가격 아님
+2024-06-01 01:00:00,10,8,10,0,-10,-80,scenario,검산용 합성 자료; 실제 급전 입찰 가격 아님
+2024-06-01 02:00:00,10,8,10,0,-10,-80,scenario,검산용 합성 자료; 실제 급전 입찰 가격 아님
+2024-06-01 03:00:00,10,8,8,5,-10,-80,scenario,검산용 합성 자료; 실제 급전 입찰 가격 아님
+2024-06-01 04:00:00,10,8,10,5,-10,-80,scenario,검산용 합성 자료; 실제 급전 입찰 가격 아님
+2024-06-01 05:00:00,10,8,10,5,-10,-80,scenario,검산용 합성 자료; 실제 급전 입찰 가격 아님
+2024-06-01 06:00:00,10,8,8,5,-10,-80,scenario,검산용 합성 자료; 실제 급전 입찰 가격 아님
