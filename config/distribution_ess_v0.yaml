@@ -1,0 +1,24 @@
+# 배전망 ESS v0 시나리오.
+# 공식 설비·선로 사양 확정 전의 가정값이며, 발표용 민감도 입력으로 사용한다.
+source_solar_capacity_mw: 14.08122
+target_solar_capacity_mw: 5.7
+
+# 공식 시간별 상한을 받으면 line_export_cap_column에 컬럼명을 지정한다.
+# 상수 상한은 테스트용 임시 시나리오로만 사용한다.
+line_export_cap_mw: null
+line_export_cap_column: line_export_cap_mw
+
+ess:
+  status: assumption_not_equipment_spec
+  capacity_mwh: 20.0
+  charge_power_mw: 4.0
+  discharge_power_mw: 4.0
+  soc_min: 0.1
+  soc_max: 0.9
+  soc_initial: 0.5
+  charge_efficiency: 0.95
+  discharge_efficiency: 0.95
+  degradation_model: fixed_throughput
+  throughput_basis: charge_plus_discharge
+  throughput_cost_krw_per_mwh: 64096.38
+  grid_charging_allowed: false
