@@ -1,0 +1,104 @@
+# 배전망 ESS 사업성(20년 현금흐름) 가정 v0 — project_economics.py 입력
+# status: 공고 조건은 공고문 원문 확인, 비용·PPA·성장률은 교체 가능한 가정값이다.
+# 운전(MILP) 설정은 유준님 config/distribution_ess_v0.yaml, 이 파일은 사업성 계산 전용.
+status: experiment_assumption_not_contract
+
+business:
+  # 2026년 AI 활용 ESS 구축지원 사업 1차(공고 제2026-337호)·2차(공고 제2026-895호, 2026-09-21)
+  ess_power_mw: 4.0
+  ess_energy_mwh: 20.0
+  solar_mw: 5.7                # 선로당 모집해야 하는 접속대기 재생에너지
+  project_years: 20            # 배터리 보증 수명 연한(20년)까지 사업 지속 의무
+  subsidy_rate: 0.5            # 총사업비(AI 활용 시스템 포함 ESS 구축비)의 50% 이내
+  subsidy_cap_krw_per_mwh: 586000000   # ESS 정격 방전용량(MWh)당 최대 5.86억원
+  fixed_income: none           # 고정수익 없음: 재생에너지 입찰시장 정산금, PPA 운영관리 수수료 등
+
+finance:
+  fx_krw_per_usd: 1350.36      # degradation_stage1 과 같은 환율
+  discount_rate: 0.07          # 가정 (Ember 2025 LCOS 가정과 같은 수준)
+  cost_escalation: 0.02        # 운영비·교체비 연 상승률 (가정)
+  om_rate_of_capex: 0.02       # O&M 연간, 초기 구축비 대비 (가정)
+  insurance_inspection_rate_of_capex: 0.005   # 보험·안전검사 연간 (가정)
+  battery_price_decline: 0.03  # 교체 시점 배터리 단가 연 하락률 (가정)
+  pcs_life_years: 15           # PCS 교체 주기 (가정)
+  pcs_share_of_capex: 0.15     # 구축비 중 PCS 비중 (가정, 2차 공고 예시는 PCS 8.3억/57.1억 = 0.145)
+
+revenue_scenarios:             # 1년차 시장수익 대비 연 변화율
+  conservative: -0.02
+  base: 0.0
+  optimistic: 0.02
+
+revenue_split:
+  # ppa: VPP가 태양광 소유자에게 kWh당 PPA 단가를 주고 전력을 사들여 시장에 판다 (VPP 몫 = 시장수익 - PPA 지급)
+  # integrated: VPP가 태양광도 소유한다 (solar_capex_krw 필요)
+  mode: ppa
+  # 0 = VPP가 태양광도 소유하거나, 버려지던(출력제어) 전력을 태양광 소유자가 무상으로 넘기는 경우
+  ppa_krw_per_kwh: [0, 130, 150, 170]   # 가정. 실제 계약 조건 확인 필요
+  solar_capex_krw: null
+  # 표준 수익 배분 (basis=standard). 2차 공고 신청서 작성 예시(26쪽)의 VPP 몫. 나머지는 발전사업자 몫.
+  # 운영 결과에 항목별 수익 열이 있을 때만 계산한다. PPA 는 지급하지 않는다.
+  standard_vpp_shares:
+    ess_capacity_payment: 1.0    # ESS 용량정산금: VPP 100%
+    solar_capacity_payment: 0.5  # 태양광 용량정산금: 발전사업자 50%, VPP 50%
+    solar_energy: 0.0            # 태양광 에너지정산금: 발전사업자 100%
+    ess_energy: 1.0              # 표에 없음. ESS 방전 수익은 ESS 소유자(VPP) 몫으로 가정
+    imbalance_penalty: 1.0       # 임밸런스 페널티: VPP 100%
+
+# ESS 용량정산금을 수익에 넣을지. 2024.9 VPP 내 ESS 별도 인정안은 부결됐지만
+# 2차 공고 표준 수익 배분 예시에는 "ESS 용량정산금(CP) VPP 100%" 항목이 있다. 두 경우를 모두 계산한다.
+ess_capacity_payment_scenarios: [false, true]
+
+batteries:
+  # usd_per_kwh: 시스템 단가(kWh 기준). battery_share: 교체 시 다시 사야 하는 몫
+  new_2021_pnnl:
+    label: 신품 2021 (PNNL LFP DC블록)
+    usd_per_kwh: 182.27
+    battery_share: 1.0
+    soh: 1.0
+    efficiency: 0.95
+    cycle_life: 2400
+    calendar_life_years: 16
+    dod: 0.8
+    source: docs/degradation_stage1.md (PNNL 2021)
+  new_2025_bnef:
+    label: 신품 2025 (BNEF 4시간 턴키)
+    usd_per_kwh: 110
+    battery_share: 0.65
+    soh: 1.0
+    efficiency: 0.95
+    cycle_life: 6000
+    calendar_life_years: 20
+    dod: 0.8
+    source: https://www.energy-storage.news/battery-storage-system-prices-continue-to-fall-sharply-bnef-and-ember-reports-find/
+  new_2025_ember:
+    label: 신품 2025 설치 포함 (Ember)
+    usd_per_kwh: 125
+    battery_share: 0.6
+    soh: 1.0
+    efficiency: 0.95
+    cycle_life: 6000
+    calendar_life_years: 20
+    dod: 0.8
+    source: https://www.portfolio.hu/en/business/20251219/much-needed-market-survey-reveals-how-much-an-energy-storage-system-costs-today-and-whether-it-is-worth-investing-in-807110
+  kr_notice_example:
+    label: 국내 구축비 예시 (2차 공고)
+    # 2차 공고 신청서 작성 예시(25쪽) 4MW/20MWh 총 57.14억원 = 배터리 40 + PCS 8.3 + EPC 2.14 + 인허가 0.7 + 기타 6
+    # 57.14억 / (1350.36원/USD x 20,000kWh) = 211.6 USD/kWh. 예시값이라 실제 견적과 다를 수 있다.
+    usd_per_kwh: 211.6
+    battery_share: 0.7          # 배터리 40억 / 57.14억
+    soh: 1.0
+    efficiency: 0.95
+    cycle_life: 6000
+    calendar_life_years: 20
+    dod: 0.8
+    source: 2026 AI 활용 ESS 구축지원 사업 2차 공고 별첨1 신청서 작성 예시 (예시값)
+  second_life_example:
+    label: 사용후 배터리 (예시 가정)
+    usd_per_kwh: 55
+    battery_share: 0.7
+    soh: 0.8
+    efficiency: 0.93
+    cycle_life: 3000
+    calendar_life_years: 10
+    dod: 0.8
+    source: 가정 — 신품 2025(BNEF)의 50% 가격, 잔존용량 80%, 잔여 3,000회, 효율 0.93
