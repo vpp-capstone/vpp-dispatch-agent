@@ -27,3 +27,11 @@ https://doi.org/10.1016/j.est.2025.119606
 - 논문은 건물 부하·PV·배터리 + TOU 요금. 우리는 제주 SMP + 중개사업자 정산.
 - 논문 타깃은 순부하(부하 − PV). 우리 타깃은 팀에서 결정.
 - 포트폴리오 범위, ESS 제어 권한, 비용 항목, 출력제한, 종료 SOC 등은 `docs/formulation.md`에서 정리.
+
+## 진행 결과 (2026-11-17)
+
+- 타깃: SMP 가격 (목적함수 계수). 그래서 논문의 미분 가능한 최적화 층 대신,
+  가격 예측용 SPO+ 손실(Elmachtoub & Grigas, 2022)을 LightGBM 사용자 정의 손실로 넣었다
+  (`src/vpp/spo_forecast.py`). 단계 4는 `forecast.py:train_cost_aware` 대신 이 모듈로 구현했다.
+- 결과: 같은 모델·특징·매달 재학습에서 손실만 바꾸자 오차는 2.5% 커졌지만 12개 조건 모두 20년 NPV 가 올랐다
+  (대표 조건 3.87억 → 4.60억). 자세한 내용: `docs/results/spo_forecast_20261117.md`
