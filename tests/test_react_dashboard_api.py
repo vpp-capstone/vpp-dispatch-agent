@@ -1,0 +1,166 @@
+"""The React adapter must preserve source identity, nulls and archive integrity."""
+
+import hashlib
+import json
+from datetime import date
+
+import pandas as pd
+import pytest
+
+from api import dashboard as adapter
+from tests.test_overview_data import saved_experiment
+
+
+@pytest.fixture
+def portfolio(tmp_path, monkeypatch):
+    folder = tmp_path / "result"
+    folder.mkdir()
+    saved_experiment(folder, rec=True)
+    (folder / "validation.json").write_text(json.dumps({"plan_checks_all_passed": True}))
+    release = {"id": "verified", "label": "fixture", "backtest": str(folder)}
+    monkeypatch.setattr(adapter, "releases", lambda root: ({"state": "needs_data"}, [release]))
+    monkeypatch.setenv("VPP_PROJECT_ROOT", str(tmp_path))
+    return tmp_path, folder
+
+
+def test_saved_forecast_is_not_reported_as_execution(portfolio, client):
+    response = client.get(
+        "/api/v1/dashboard/snapshot",
+        params={"source": "portfolio", "selection": "verified", "day": "2024-06-01"},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["id"] == "portfolio:verified:2024-06-01"
+    assert data["executionAvailable"] is False
+    assert data["actualIncome"] is None and data["cumulativeIncome"] is None
+    assert all(h["actualSupply"] is None and h["income"] is None for h in data["hours"])
+    assert data["plannedIncome"] == pytest.approx(sum(r["planned"] for r in data["ledger"]))
+    assert all(r["actual"] is None for r in data["ledger"])
+
+
+def test_unknown_selection_bad_date_and_unverified_plan_are_rejected(portfolio, client):
+    query = {"source": "portfolio", "selection": "verified", "day": "2024-06-01"}
+    assert (
+        client.get(
+            "/api/v1/dashboard/snapshot", params={**query, "selection": "../secret"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get("/api/v1/dashboard/snapshot", params={**query, "day": "not-date"}).status_code
+        == 422
+    )
+    assert (
+        client.get("/api/v1/dashboard/snapshot", params={**query, "day": "2024-06-02"}).status_code
+        == 422
+    )
+    (portfolio[1] / "validation.json").write_text('{"plan_checks_all_passed": false}')
+    assert client.get("/api/v1/dashboard/snapshot", params=query).status_code == 422
+
+
+def test_archive_integrity_scope_and_capacity_are_checked(tmp_path, monkeypatch):
+    file = tmp_path / "hourly.parquet"
+    file.write_bytes(b"modified")
+    meta = {
+        "schema": 1,
+        "operation": "forecast_exec",
+        "basis": "standard",
+        "ess_capacity_payment": False,
+        "capacity_mwh": 8,
+        "file": file.name,
+        "sha256": "original",
+    }
+    row = pd.Series({"id": "test", "ess_energy_mwh": 8})
+    monkeypatch.setattr(adapter, "archives", lambda *args: [(tmp_path / "manifest.json", meta)])
+    with pytest.raises(ValueError, match="검증값"):
+        adapter.load_archive(tmp_path, row)
+    meta["capacity_mwh"] = 20
+    with pytest.raises(ValueError, match="용량"):
+        adapter.load_archive(tmp_path, row)
+    meta["capacity_mwh"] = 8
+    meta["file"] = "../outside.parquet"
+    with pytest.raises(ValueError, match="범위"):
+        adapter.load_archive(tmp_path, row)
+
+
+def test_catalog_demo_readiness_requires_validation_without_removing_candidates(tmp_path, monkeypatch):
+    rows = pd.DataFrame([
+        {"id": name, "equipment": name, "line_case": "cap_2.50MW",
+         "ess_energy_mwh": 8, "ess_power_mw": 2, "npv_krw": 100}
+        for name in ("ready", "invalid", "missing")
+    ])
+    monkeypatch.setenv("VPP_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(adapter, "releases", lambda root: ({}, []))
+    monkeypatch.setattr(adapter, "load_display", lambda root: (rows, ""))
+    monkeypatch.setattr(adapter, "revenue_breakdown", lambda row: {"total": 200})
+    monkeypatch.setattr(adapter, "archives", lambda root, candidate: [] if candidate == "missing" else [(tmp_path / "manifest.json", {})])
+    checked = []
+
+    def load(root, row):
+        checked.append(row.id)
+        if row.id == "invalid":
+            raise ValueError("선택 설비와 저장된 ESS 용량이 다릅니다.")
+        return pd.DataFrame(), {}, "archive"
+
+    monkeypatch.setattr(adapter, "load_archive", load)
+    candidates = {c["id"]: c for c in adapter.catalog()["candidates"]}
+    assert checked == ["ready", "invalid"]
+    assert set(candidates) == {"ready", "invalid", "missing"}
+    assert candidates["ready"]["hasArchive"] is True
+    assert candidates["invalid"]["hasArchive"] is False
+    assert "용량" in candidates["invalid"]["archiveIssue"]
+    assert candidates["invalid"]["income"] == 200
+    assert candidates["missing"]["hasArchive"] is False
+    assert candidates["missing"]["archiveIssue"] is None
+
+
+def test_distribution_snapshot_keeps_missing_plan_income_and_exact_receipt_sum(
+    monkeypatch, tmp_path
+):
+    frame = pd.DataFrame(
+        {
+            "ts": pd.date_range("2025-05-01", periods=48, freq="h"),
+            "forecast_generation_mwh": 2.0,
+            "actual_generation_mwh": 1.8,
+            "committed_sell_mwh": 1.5,
+            "supply_mwh": 1.4,
+            "planned_charge_mwh": 0.5,
+            "planned_discharge_mwh": 0.0,
+            "charge_mwh": 0.4,
+            "discharge_mwh": 0.0,
+            "planned_energy_end_mwh": 4.0,
+            "soc_end": 0.5,
+            "shortfall_mwh": 0.1,
+            "vpp_ess_krw": 100.0,
+            "vpp_solar_cp_krw": 20.0,
+            "vpp_penalty_krw": -10.0,
+            "vpp_income_krw": 110.0,
+        }
+    )
+    row = pd.DataFrame(
+        [
+            {
+                "id": "A",
+                "equipment": "2/8",
+                "ess_energy_mwh": 8.0,
+                "ess_power_mw": 2.0,
+                "line_case": "cap_2.50MW",
+                "source_file": "report.csv",
+            }
+        ]
+    )
+    monkeypatch.setattr(adapter, "load_display", lambda root: (row, ""))
+    monkeypatch.setattr(
+        adapter,
+        "load_archive",
+        lambda *a: (frame, {"sha256": hashlib.sha256(b"x").hexdigest()}, "archive"),
+    )
+    result = adapter.distribution_snapshot(tmp_path, "A", date(2025, 5, 1))
+    assert len(result["hours"]) == 24
+    assert result["actualIncome"] == 2640
+    assert result["cumulativeIncome"] == 2640  # no future-day lookahead
+    assert sum(r["actual"] for r in result["ledger"]) == result["actualIncome"]
+    assert result["plannedIncome"] is None
+    assert all(h["plannedIncome"] is None for h in result["hours"])
+    assert result["provenance"]["snapshot"] == "archive"
+    assert result["selection"] == "A"

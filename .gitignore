@@ -10,6 +10,8 @@ venv/
 htmlcov/
 dist/
 build/
+node_modules/
+*.tsbuildinfo
 
 # Data (sample/ 만 커밋, 나머지는 Drive 공유)
 data/raw/*
