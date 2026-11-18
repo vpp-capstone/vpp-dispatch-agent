@@ -1,6 +1,7 @@
 import type { Snapshot, Page } from "../types";
 import { difference, money, number, time } from "../lib/format";
 import { Stats, SectionTitle, TaskRow } from "../components/Shared";
+import { Term } from "../components/Help";
 
 export function Settlement({
   data,
@@ -54,7 +55,9 @@ export function Settlement({
           <tbody>
             {data.ledger.map((row) => (
               <tr key={row.label}>
-                <td>{row.label}</td>
+                <td>
+                  <Term label={row.label} />
+                </td>
                 <td>{money(row.planned)}</td>
                 <td className={(row.actual ?? 0) < 0 ? "negative" : ""}>
                   {money(row.actual)}
@@ -63,7 +66,9 @@ export function Settlement({
               </tr>
             ))}
             <tr className="total">
-              <td>{data.incomeLabel}</td>
+              <td>
+                <Term label={data.incomeLabel} />
+              </td>
               <td>{money(data.plannedIncome)}</td>
               <td>{money(data.actualIncome)}</td>
               <td>{money(delta)}</td>

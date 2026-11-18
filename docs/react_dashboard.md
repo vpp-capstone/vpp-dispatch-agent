@@ -3,7 +3,60 @@
 기존 Python 계산·검산 코드를 유지하고 React + TypeScript + Vite 화면을 추가했다.
 Streamlit 진입점도 그대로 사용할 수 있다. 실제 제어·입찰·새 운영계획 생성 API는 구현하지 않는다.
 
-## 실행
+## Docker로 실행
+
+Docker Desktop(또는 Docker Engine + Compose)을 설치하고 실행한다. 프로젝트 루트에서:
+
+```bash
+docker compose up
+```
+
+브라우저: **http://localhost:8000/dashboard/**. 컨테이너 하나가 빌드된 React 화면과
+FastAPI를 함께 제공한다. 첫 실행에는 인터넷 연결과 이미지·패키지 다운로드 시간이 필요하며,
+호스트의 Python·Node·가상환경은 사용하지 않는다. 기본 접속은 해당 컴퓨터에서만 가능하다.
+Docker Desktop의 `8000:8000` 링크나 `http://localhost:8000/`로 열어도
+`/dashboard/`로 자동 이동한다.
+
+팀원이 준비할 폴더는 아래와 같다. 개인 사용자 이름·드라이브 위치는 설정에 넣지 않는다.
+`data/`, `artifacts/`, `config/`, `docs/results/` 디렉터리가 모두 있어야 실행된다.
+예측 원본이 없는 조회 전용 시연에서도 `artifacts/` 디렉터리는 만들어 둔다.
+
+| 위치 | 공유할 내용 |
+|---|---|
+| `data/processed/distribution_replay/` | 시연할 설비의 결과 폴더 전체: `manifest.json`과 그 파일이 가리키는 시간별 Parquet. 파일명·해시를 보존한다. |
+| `data/processed/operator_pipeline/` | 포트폴리오 조회 시 `status.json`과 그 결과의 `backtests/` 폴더. 기존 계산 환경까지 공유하려면 `plans/`, `snapshots/`, `releases/`도 포함한다. |
+| `docs/results/` | `distribution_ess_operating_20261115.csv`, `distribution_ess_sizing_20261115.csv`, `distribution_ess_economics_20261115.md` |
+| `artifacts/`, 나머지 `data/` | 팀이 공유한 기존 예측·시장 자료를 같은 하위 폴더에 둔다. React 저장 결과 조회에는 모델 재학습이 필요하지 않다. |
+| `config/` | 저장소의 설정 파일. Compose가 같은 위치를 연결한다. |
+
+Git에 없는 데이터·결과 CSV·Parquet은 팀 Drive에서 별도로 받아야 한다. 저장소를 복제하는
+것만으로 공유 데이터가 다운로드되지는 않는다. 원본 예측만 있고 시간별 결과가 없으면
+운영 재생이 활성화되지 않으므로 시연용 **저장 결과도** 함께 전달한다.
+
+Compose는 호스트의 위 폴더를 컨테이너의 `/app/` 아래에 읽기 전용으로 연결한다.
+프로젝트 전체를 `/app`에 덮어 마운트하지 않아 이미지의 `frontend/dist`가 가려지지 않는다.
+종료·재생성해도 공유 데이터가 유지되며 API는 학습·최적화·파일 변경을 하지 않는다.
+
+- 종료: 실행 터미널에서 `Ctrl+C`, 또는 다른 터미널에서 `docker compose down`.
+- 백그라운드 실행: `docker compose up -d`; 로그: `docker compose logs -f dashboard`.
+- 코드 변경 반영: `docker compose up --build`.
+- 상태 확인: `docker compose ps`, `http://localhost:8000/health`.
+- 8000 포트 사용 중이면 프로젝트 `.env`에 `VPP_DASHBOARD_PORT=8001`을 추가하고 재실행한다.
+  접속 주소도 `http://localhost:8001/dashboard/`로 바뀐다. 기본 실행에는 `.env`가 필요 없다.
+
+### 공유 결과 경로
+
+새 운영 파이프라인 release/status의 `backtest`, `plan`, `inputs`, `source_paths`,
+`output_hashes`와 누락 파일 경로는 프로젝트 기준 상대경로(`/` 구분자)로 저장한다.
+예: `data/processed/operator_pipeline/backtests/<결과ID>`.
+화면과 캐시 검증은 현재 프로젝트 루트를 기준으로 경로를 해석한다.
+
+기존 Mac/Linux/Windows 절대경로는 알려진 프로젝트 하위 폴더(`data/processed/` 등)를
+기준으로 읽을 때 자동 연결한다. 사용자별 경로 치환이나 원본 파일 수정이 필요 없다.
+프로젝트 밖 경로·상위 폴더 이동·외부 심볼릭 링크는 허용하지 않는다.
+결과 파일 내부의 계산 당시 출처 기록은 해시 검증을 위해 그대로 보존한다.
+
+## Python·Node로 직접 실행
 
 프로젝트 루트에서 Python 환경을 활성화한 다음 실행한다. Node 20.19+ 또는 22.12+가 필요하다.
 

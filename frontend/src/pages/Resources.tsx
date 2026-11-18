@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowUpRight } from "lucide-react";
 import type { Catalog, Candidate } from "../types";
 import { lineLabel, money, number } from "../lib/format";
 import { SectionTitle } from "../components/Shared";
+import { Help, Term } from "../components/Help";
 import { comparisonReducer } from "../lib/comparison";
 import {
   candidateView,
@@ -92,6 +93,10 @@ export function Resources({
           : "설비와 사업성 조건을 다시 점검합니다"}
       </h1>
       <p className="subtitle">
+        전력망 조건을 확인하고 설비를 비교한 뒤, 선택한 설비의
+        운영계획·현황·정산을 살펴보세요.
+      </p>
+      <p className="caption">
         배전망 ESS · 태양광 5.7 MW의 저장된 후보를 비교합니다. 21곳 운영
         포트폴리오와 별도 분석 범위입니다.
       </p>
@@ -126,9 +131,13 @@ export function Resources({
           : "모든 설비의 사업성을 비교합니다. 운영 시뮬레이션이 준비되지 않은 후보도 목록에 유지됩니다."}
       </p>
       <div className="resource-filter">
-        <label htmlFor="line">선로 조건</label>
+        <div className="line-label">
+          <label htmlFor="line">사업장 전력망 조건</label>
+          <Help label="선로 조건" />
+        </div>
         <select
           id="line"
+          aria-describedby="line-condition-help"
           value={line}
           disabled={!lines.length}
           onChange={(e) => {
@@ -145,6 +154,14 @@ export function Resources({
         </select>
         <span>기준 시나리오 · 표준 배분 · ESS 용량정산금 제외</span>
       </div>
+      <p id="line-condition-help" className="line-explanation">
+        <strong>전력망으로 내보낼 수 있는 최대 출력 조건입니다.</strong>{" "}
+        {line.startsWith("cap_")
+          ? "고정 상한은 08:00부터 18:00 전까지 적용하고, 나머지 시간에는 사실상 제한을 두지 않은 분석 가정입니다."
+          : line.startsWith("dyn_")
+            ? "동적 상한은 태양광 발전 비율이 낮아질수록 내보낼 수 있는 출력이 늘어나는 분석 가정입니다. 표시값은 발전 비율이 최대일 때의 상한입니다."
+            : "선택한 조건에서 계산된 설비 후보를 비교합니다."}
+      </p>
       <SectionTitle
         title="동일 선로의 설비 후보"
         aside={`현재 선로 ${rows.length}개 표시 / 전체 ${allLineCount}개 · NPV는 보고값 기준`}
@@ -171,10 +188,18 @@ export function Resources({
           <thead>
             <tr>
               <th scope="col">선택</th>
-              <th scope="col">설비</th>
-              <th scope="col">연간 VPP 수입</th>
-              <th scope="col">20년 NPV</th>
-              <th scope="col">운영 시뮬레이션</th>
+              <th scope="col">
+                <Term label="설비" />
+              </th>
+              <th scope="col">
+                <Term label="연간 VPP 수입" />
+              </th>
+              <th scope="col">
+                <Term label="20년 NPV" />
+              </th>
+              <th scope="col">
+                <Term label="운영 시뮬레이션" />
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -313,7 +338,9 @@ function CandidateComparison({
         <tbody>
           {metrics.map((metric) => (
             <tr key={metric.label}>
-              <th scope="row">{metric.label}</th>
+              <th scope="row">
+                <Term label={metric.label} />
+              </th>
               {candidates.map((c) => (
                 <td
                   key={c.id}

@@ -16,14 +16,15 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
-
-from dashboard import distribution_replay as replay
 from dashboard.distribution_display import load_display
 from dashboard.distribution_operation import revenue_breakdown
 from dashboard.operator_simulation import replay_payload
 from dashboard.overview_data import load_experiment
+from fastapi import APIRouter, HTTPException, Query
+
+from dashboard import distribution_replay as replay
 from vpp.baselines import plan_revenue_breakdown
+from vpp.project_paths import resolve_project_path
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
@@ -192,7 +193,9 @@ def distribution_snapshot(root: Path, candidate: str, selected: date) -> dict:
         },
         "basis": "저장된 실행 백테스트 · forecast_exec / standard · 실제 정산 아님",
         "incomeLabel": "VPP 귀속 수입",
-        "incomeNote": "투자·유지·교체비 차감 전. 편차 정산은 에너지 수입에 포함되어 다시 차감하지 않습니다.",
+        "incomeNote": (
+            "투자·유지·교체비 차감 전. 편차 정산은 에너지 수입에 포함되어 다시 차감하지 않습니다."
+        ),
         "executionAvailable": True,
         "hours": hours,
         "ledger": ledger,
@@ -219,12 +222,7 @@ def portfolio_snapshot(root: Path, selection: str, selected: date) -> dict:
     release = next((r for r in options if r["id"] == selection), None)
     if release is None:
         raise LookupError("사용 가능한 결과 묶음이 아닙니다.")
-    folder = within(
-        root,
-        Path(release["backtest"])
-        if Path(release["backtest"]).is_absolute()
-        else root / release["backtest"],
-    )
+    folder = resolve_project_path(root, release["backtest"])
     validation = read_json(folder / "validation.json")
     if validation.get("plan_checks_all_passed") is not True:
         raise ValueError("계획 검산을 통과한 결과만 표시합니다.")

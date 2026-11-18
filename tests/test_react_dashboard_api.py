@@ -6,8 +6,8 @@ from datetime import date
 
 import pandas as pd
 import pytest
-
 from api import dashboard as adapter
+
 from tests.test_overview_data import saved_experiment
 
 
@@ -36,6 +36,32 @@ def test_saved_forecast_is_not_reported_as_execution(portfolio, client):
     assert all(h["actualSupply"] is None and h["income"] is None for h in data["hours"])
     assert data["plannedIncome"] == pytest.approx(sum(r["planned"] for r in data["ledger"]))
     assert all(r["actual"] is None for r in data["ledger"])
+
+
+@pytest.mark.parametrize("prefix", ["", "/Users/former/team project/", "/home/member/repo/",
+                                    "C:\\Users\\member\\팀 프로젝트\\"])
+def test_shared_portfolio_opens_after_relocation_without_rewriting_data(
+    tmp_path, monkeypatch, client, prefix
+):
+    root = tmp_path / "another checkout"
+    relative = "data/processed/operator_pipeline/backtests/verified"
+    folder = root / relative
+    folder.mkdir(parents=True)
+    saved_experiment(folder, rec=True)
+    (folder / "validation.json").write_text('{"plan_checks_all_passed": true}')
+    saved_path = prefix + (relative.replace("/", "\\") if "\\" in prefix else relative)
+    release = {"id": "verified", "label": "shared", "backtest": saved_path}
+    status = root / "data/processed/operator_pipeline/status.json"
+    status.write_text(json.dumps({"active": release, "releases": {"shared": release}}))
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    monkeypatch.setenv("VPP_PROJECT_ROOT", str(root))
+    monkeypatch.chdir(tmp_path)  # Resolving must not depend on the server's working directory.
+    response = client.get("/api/v1/dashboard/snapshot", params={
+        "source": "portfolio", "selection": "verified", "day": "2024-06-01",
+    })
+    assert response.status_code == 200, response.text
+    assert len(response.json()["hours"]) == 24
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
 
 
 def test_unknown_selection_bad_date_and_unverified_plan_are_rejected(portfolio, client):
@@ -83,7 +109,9 @@ def test_archive_integrity_scope_and_capacity_are_checked(tmp_path, monkeypatch)
         adapter.load_archive(tmp_path, row)
 
 
-def test_catalog_demo_readiness_requires_validation_without_removing_candidates(tmp_path, monkeypatch):
+def test_catalog_demo_readiness_requires_validation_without_removing_candidates(
+    tmp_path, monkeypatch
+):
     rows = pd.DataFrame([
         {"id": name, "equipment": name, "line_case": "cap_2.50MW",
          "ess_energy_mwh": 8, "ess_power_mw": 2, "npv_krw": 100}
@@ -93,7 +121,12 @@ def test_catalog_demo_readiness_requires_validation_without_removing_candidates(
     monkeypatch.setattr(adapter, "releases", lambda root: ({}, []))
     monkeypatch.setattr(adapter, "load_display", lambda root: (rows, ""))
     monkeypatch.setattr(adapter, "revenue_breakdown", lambda row: {"total": 200})
-    monkeypatch.setattr(adapter, "archives", lambda root, candidate: [] if candidate == "missing" else [(tmp_path / "manifest.json", {})])
+    monkeypatch.setattr(
+        adapter, "archives",
+        lambda root, candidate: (
+            [] if candidate == "missing" else [(tmp_path / "manifest.json", {})]
+        ),
+    )
     checked = []
 
     def load(root, row):

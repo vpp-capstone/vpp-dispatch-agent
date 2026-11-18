@@ -9,6 +9,7 @@ import {
 import type { Dispatch } from "react";
 import type { Action, Workspace } from "../lib/workspace";
 import { time } from "../lib/format";
+import { Term } from "./Help";
 
 export function Stats({
   items,
@@ -19,7 +20,9 @@ export function Stats({
     <dl className="stats">
       {items.map((item) => (
         <div key={item.label}>
-          <dt>{item.label}</dt>
+          <dt>
+            <Term label={item.label} />
+          </dt>
           <dd>{item.value}</dd>
           {item.hint && <small>{item.hint}</small>}
         </div>

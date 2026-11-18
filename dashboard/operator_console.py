@@ -16,6 +16,7 @@ from dashboard.signal_replay import render_signal
 
 from ui import ROOT
 from vpp import operator_pipeline as pipeline
+from vpp.project_paths import resolve_project_path
 
 CSS_PATH = Path(__file__).parent / "assets/operator_console.css"
 
@@ -454,7 +455,7 @@ def show_forecasts(data, day, release):
         from vpp import forecast_inputs as fi
         from vpp import forecast_metrics as fm
 
-        sources = release["inputs"]
+        sources = {k: resolve_project_path(ROOT, v) for k, v in release["inputs"].items()}
         pred = fm.load_generation_eval_frame(
             Path(sources["solar"]), Path(sources["wind"]), Path(sources["plants"])
         )
@@ -783,7 +784,7 @@ def render():
         st.info("예측 창이 없어 운영계획을 만들지 못했습니다. "
                 "실행 상태에서 입력 파일을 확인하세요.")
         return
-    folder = Path(release["backtest"])
+    folder = resolve_project_path(ROOT, release["backtest"])
     try:
         data = read_report(str(folder), (folder / "summary.json").stat().st_mtime_ns)
     except (ValueError, OSError) as exc:
@@ -837,7 +838,7 @@ def render():
         )
         with st.expander("최근 운영일의 48시간 계획 (D 확정 + D+1 잠정)"):
             st.caption(release["start_soc_note"])
-            plan48 = pd.read_csv(Path(release["plan"]) / "plan_48h.csv")
+            plan48 = pd.read_csv(resolve_project_path(ROOT, release["plan"]) / "plan_48h.csv")
             plan48["ts"] = pd.to_datetime(plan48["ts"], utc=True).dt.tz_convert("Asia/Seoul")
             table48 = bid_table(plan48)
             table48.insert(0, "날짜", plan48.ts.dt.strftime("%m/%d"))

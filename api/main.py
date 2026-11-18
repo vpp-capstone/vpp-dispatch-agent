@@ -6,6 +6,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.dashboard import router as dashboard_router
@@ -20,6 +21,12 @@ app.include_router(dashboard_router)
 frontend_dist = Path(__file__).resolve().parents[1] / "frontend/dist"
 if frontend_dist.is_dir():
     app.mount("/dashboard", StaticFiles(directory=frontend_dist, html=True), name="dashboard")
+
+
+@app.get("/", include_in_schema=False)
+def dashboard_entry() -> RedirectResponse:
+    """Docker Desktop's port link opens the server root."""
+    return RedirectResponse(url="/dashboard/")
 
 
 @app.get("/health")

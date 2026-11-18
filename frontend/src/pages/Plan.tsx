@@ -3,6 +3,7 @@ import type { Snapshot, Page } from "../types";
 import { money, number, time } from "../lib/format";
 import { SectionTitle, Stats } from "../components/Shared";
 import { Timeline } from "../components/Timeline";
+import { Term } from "../components/Help";
 import { useReview } from "../hooks/useReview";
 
 export function Plan({
@@ -141,10 +142,18 @@ function PlanTable({
         <thead>
           <tr>
             <th>시간</th>
-            <th>공급계획</th>
-            <th>ESS 충전</th>
-            <th>ESS 방전</th>
-            <th>종료 SOC</th>
+            <th>
+              <Term label="공급계획" />
+            </th>
+            <th>
+              <Term label="ESS 충전" />
+            </th>
+            <th>
+              <Term label="ESS 방전" />
+            </th>
+            <th>
+              <Term label="종료 SOC" />
+            </th>
           </tr>
         </thead>
         <tbody>

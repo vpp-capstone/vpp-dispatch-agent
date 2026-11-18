@@ -1,0 +1,22 @@
+# Only application/build inputs enter the image. Shared data is mounted at runtime.
+**
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!api/
+!api/**
+!dashboard/
+!dashboard/**
+!config/
+!config/**
+!frontend/
+!frontend/**
+**/__pycache__
+**/*.py[cod]
+frontend/node_modules
+frontend/dist
+frontend/*.tsbuildinfo
+**/.DS_Store
+**/.env
+**/.env.*
