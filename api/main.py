@@ -3,12 +3,30 @@
 라우터는 입력 검증과 오류 응답만 맡고 계산은 src/vpp/에서 한다.
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+
+from api.dashboard import router as dashboard_router
 
 from vpp.pipeline import run_day_ahead
 from vpp.schemas import DayAheadRun, ForecastRequest
 
 app = FastAPI(title="Jeju VPP Day-Ahead API", version="0.3.0")
+app.include_router(dashboard_router)
+
+# Build once with `npm --prefix frontend run build`, then restart this process.
+frontend_dist = Path(__file__).resolve().parents[1] / "frontend/dist"
+if frontend_dist.is_dir():
+    app.mount("/dashboard", StaticFiles(directory=frontend_dist, html=True), name="dashboard")
+
+
+@app.get("/", include_in_schema=False)
+def dashboard_entry() -> RedirectResponse:
+    """Docker Desktop's port link opens the server root."""
+    return RedirectResponse(url="/dashboard/")
 
 
 @app.get("/health")

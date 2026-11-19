@@ -83,6 +83,20 @@ Git에는 `data/reference/`, `data/sample/`과 근거 보존용 열화·용량�
 
 ## 설치·실행
 
+React 운영 화면은 [React 대시보드 실행 안내](docs/react_dashboard.md)를 참고하세요.
+운영 현황·운영계획·실적·정산을 같은 결과 묶음으로 연결하며 설비 재점검은 별도 화면으로 제공합니다.
+
+Docker Desktop을 실행하고 공유받은 `data/`, `artifacts/`, `docs/results/`를 프로젝트의
+같은 위치에 두면 Python·Node 설치나 개인별 경로 수정 없이 실행할 수 있습니다.
+
+```bash
+docker compose up
+```
+
+접속: **http://localhost:8000/dashboard/**. 첫 실행은 이미지 다운로드·빌드가 필요합니다.
+기존 결과는 읽기 전용으로 연결합니다. 코드 수정 후에는 `docker compose up --build`를 사용합니다.
+공유할 파일 목록과 종료 방법은 [Docker 실행 안내](docs/react_dashboard.md#docker로-실행)를 참고하세요.
+
 운영자 화면과 로컬 모델 자동 실행은 [운영 대시보드 안내](docs/operator_dashboard.md)를 참고하세요.
 `dashboard/app.py`는 코드·입력 변경을 확인해 예측 → MILP → 검산 → 화면 갱신을 연결합니다.
 원본이 없으면 실행 상태에 누락 자료를 표시하며, 기존 예측 결과와 새 모델 결과를 구분합니다.

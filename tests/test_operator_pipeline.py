@@ -1,5 +1,7 @@
 """Content changes, improved predictions and blocked producers must be visible."""
 
+import json
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -51,15 +53,15 @@ def test_same_inputs_reuse_but_price_change_recalculates(tmp_path):
     first = op.refresh_dispatch(tmp_path, cfg, sources, label="test")
     again = op.refresh_dispatch(tmp_path, cfg, sources, label="test")
     assert again == first
-    original_snapshot = Path(first["inputs"]["smp"]).read_bytes()
+    original_snapshot = (tmp_path / first["inputs"]["smp"]).read_bytes()
     smp = pd.read_csv(sources["smp"])
     smp.smp_hat += 1
     smp.smp_hat_krw_per_mwh += 1000
     smp.to_csv(sources["smp"], index=False)
     second = op.refresh_dispatch(tmp_path, cfg, sources, label="test")
     assert second["id"] != first["id"]
-    assert Path(first["inputs"]["smp"]).read_bytes() == original_snapshot
-    assert Path(second["plan"], "plan_48h.csv").exists()
+    assert (tmp_path / first["inputs"]["smp"]).read_bytes() == original_snapshot
+    assert (tmp_path / second["plan"] / "plan_48h.csv").exists()
     assert second["realized_profit"] is None
 
 
@@ -79,7 +81,45 @@ def test_invalid_new_input_does_not_publish_release(tmp_path):
     with pytest.raises(ValueError, match="48시간"):
         op.refresh_dispatch(tmp_path, cfg, sources, label="broken")
     assert len(list((tmp_path / "output/releases").glob("*.json"))) == 1
-    assert Path(original["backtest"], "summary.json").exists()
+    assert (tmp_path / original["backtest"] / "summary.json").exists()
+
+
+def test_shared_release_reuses_verified_outputs_after_moving_project(tmp_path, monkeypatch):
+    original = tmp_path / "original"
+    original.mkdir()
+    write_inputs(original, DAYS)
+    (original / "rec.yaml").write_text("weight: 1\nprice_krw_per_rec: 100\n")
+
+    def configuration(root):
+        return {
+            "output": str(root / "data/processed/operator_pipeline"),
+            "plants": str(root / "plants.csv"), "ess": str(root / "ess.yaml"),
+            "rec": str(root / "rec.yaml"),
+            **{k: str(root / f"{k}.parquet") for k in ("solar", "wind")},
+            "smp": str(root / "smp.csv"),
+        }
+
+    cfg = configuration(original)
+    first = op.refresh_dispatch(original, cfg, {k: Path(cfg[k]) for k in op.DATASET_KEYS},
+                                label="shared")
+    revision = op.revision(original, cfg)
+    assert str(original) not in json.dumps(first)
+    target = tmp_path / "team member checkout"
+    shutil.copytree(original, target)
+    original.rename(tmp_path / "unavailable-original")
+
+    def forbid_calculation(*args, **kwargs):
+        pytest.fail("Moving unchanged data must not recalculate verified outputs")
+
+    monkeypatch.setattr("vpp.forecast_backtest.run_forecast_backtest", forbid_calculation)
+    monkeypatch.setattr("vpp.operating_plan.run_operating_plan", forbid_calculation)
+    monkeypatch.chdir(tmp_path)
+    cfg = configuration(target)
+    assert op.revision(target, cfg) == revision
+    again = op.refresh_dispatch(target, cfg, {k: Path(cfg[k]) for k in op.DATASET_KEYS},
+                                label="shared")
+    assert again == first
+    assert (target / again["backtest"] / "summary.json").is_file()
 
 
 def test_inference_keeps_missing_labels_and_uses_training_category_map():
@@ -172,7 +212,7 @@ def test_run_uses_shared_files_and_blocks_when_one_is_missing(tmp_path, monkeypa
     blocked = op.run(tmp_path)
     assert blocked["state"] == "needs_data"
     assert blocked["stages"][-1]["state"] == "blocked"
-    assert blocked["stages"][-1]["missing"] == [str(tmp_path / "smp.csv")]
+    assert blocked["stages"][-1]["missing"] == ["smp.csv"]
     assert blocked["active"]["id"] == result["active"]["id"]  # 이전 검산 결과 유지
     assert blocked["revision"] != first_revision
     assert [r["name"] for r in op.requirements(cfg) if not r["ready"]] == ["SMP 예측"]
@@ -214,7 +254,7 @@ def test_two_datasets_get_separate_releases_and_only_missing_one_blocks(tmp_path
     blocked = op.run(tmp_path)
     assert blocked["state"] == "needs_data"
     assert [s["state"] for s in blocked["stages"]] == ["complete", "blocked"]
-    assert blocked["stages"][1]["missing"] == [str(tmp_path / "solar_b.parquet")]
+    assert blocked["stages"][1]["missing"] == ["solar_b.parquet"]
     assert set(blocked["releases"]) == {"A", "B"}  # 이전 B 결과는 유지
     assert blocked["active"]["id"] == result["active"]["id"]
 

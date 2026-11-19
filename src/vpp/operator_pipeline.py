@@ -28,6 +28,13 @@ else:
 
 import yaml
 
+from vpp.project_paths import (
+    portable_release,
+    portable_status,
+    relative_project_path,
+    resolve_project_path,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "config/operator_pipeline.yaml"
 INPUT_KEYS = ("solar", "wind", "smp", "plants", "ess", "rec")  # 공유 결과 파일 + 설정
@@ -148,8 +155,14 @@ def _rec_table(root: Path, rec_path: str | None) -> Path | None:
 def revision(root: Path, cfg: dict) -> str:
     """공유 파일·설정·최적화 코드의 내용 지문. 파일명이 같아도 내용이 바뀌면 달라진다."""
     items = datasets(cfg)
-    identity = {k: cfg.get(k) for k in ("plants", "ess", "rec")}
-    identity["datasets"] = [{k: item.get(k) for k in ("name", *DATASET_KEYS)} for item in items]
+    def location(value):
+        return relative_project_path(root, value) if value else None
+
+    identity = {k: location(cfg.get(k)) for k in ("plants", "ess", "rec")}
+    identity["datasets"] = [
+        {"name": item.get("name"), **{k: location(item.get(k)) for k in DATASET_KEYS}}
+        for item in items
+    ]
     h = hashlib.sha256(json.dumps(identity, sort_keys=True).encode())
     for name in ENGINE_FILES:
         path = root / "src/vpp" / name
@@ -165,12 +178,13 @@ def revision(root: Path, cfg: dict) -> str:
                       else f"missing:{item['name']}:{key}").encode())
     table = _rec_table(root, cfg.get("rec"))
     if table is not None:
-        h.update((digest(table) if table.exists() else f"missing:{table}").encode())
+        h.update((digest(table) if table.exists()
+                  else f"missing:{relative_project_path(root, table)}").encode())
     return h.hexdigest()
 
 
 def status(root: Path = ROOT) -> dict:
-    return read_json(Path(config(root)["output"]) / "status.json")
+    return portable_status(root, read_json(Path(config(root)["output"]) / "status.json"))
 
 
 def requirements(cfg: dict) -> list[dict]:
@@ -222,7 +236,15 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         paths["rec_table"] = Path(rec.table_source)
     hashes = {k: digest(p) for k, p in paths.items()}
     rec_info = rec_metadata(rec)
-    signature = {"files": hashes, "engine": code.hexdigest(), "rec": rec_info}
+    signature_rec = dict(rec_info)
+    if signature_rec.get("source"):
+        signature_rec["source"] = relative_project_path(root, signature_rec["source"])
+    if (signature_rec.get("pricing") or {}).get("table"):
+        signature_rec["pricing"] = {
+            **signature_rec["pricing"],
+            "table": relative_project_path(root, signature_rec["pricing"]["table"]),
+        }
+    signature = {"files": hashes, "engine": code.hexdigest(), "rec": signature_rec}
     key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()[:24]
     done = out / "releases" / f"{key}.json"
     previous = read_json(done)
@@ -230,11 +252,12 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         previous
         and previous.get("output_hashes")
         and all(
-            Path(p).exists() and digest(Path(p)) == expected
+            resolve_project_path(root, p).exists()
+            and digest(resolve_project_path(root, p)) == expected
             for p, expected in previous["output_hashes"].items()
         )
     ):
-        return previous
+        return portable_release(root, previous)
     snap = out / "snapshots" / key
     snap.mkdir(parents=True, exist_ok=True)
     copies = {}
@@ -352,6 +375,7 @@ def refresh_dispatch(root: Path, cfg: dict, sources: dict, *, label: str) -> dic
         for p in folder.iterdir()
         if p.suffix in (".csv", ".json")
     }
+    result = portable_release(root, result)
     atomic_json(done, result)
     return result
 
@@ -380,7 +404,7 @@ def run(root: Path = ROOT) -> dict:
         }
 
         def save():
-            atomic_json(out / "status.json", state)
+            atomic_json(out / "status.json", portable_status(root, state))
 
         save()
 
@@ -406,7 +430,8 @@ def run(root: Path = ROOT) -> dict:
                 else:
                     state["stages"].append({
                         "name": stage, "state": "blocked", "dataset": name,
-                        "missing": [str(p) for p in sources.values() if not p.exists()],
+                        "missing": [relative_project_path(root, p)
+                                    for p in sources.values() if not p.exists()],
                     })
                 save()
             state["active"] = releases.get(items[0]["name"]) or old.get("active")
