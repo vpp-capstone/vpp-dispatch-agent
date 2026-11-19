@@ -101,7 +101,7 @@ ESS 를 덜 쓴다.
 ```bash
 # 1) SPO+ 예측 (2025년 매달 재학습, 2코어 CPU 기준 약 1시간 40분)
 python -m vpp.spo_forecast \
-  --base data/processed/forecast/smp_forecast_distribution_2025.csv \
+  --base data/processed/forecast/smp_forecast.csv \
   --generation artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet \
   --out data/processed/forecast/smp_forecast_spo_2025.csv
 

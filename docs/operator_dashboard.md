@@ -86,10 +86,13 @@ python -m vpp.operator_pipeline
   `data/processed/market/market_hourly.csv`, REC·ESS·사업성 설정은 기존 config 파일이다.
   예비력은 `data/processed/market/fcr_hourly.csv`와
   `data/raw/market/reserve_prices/한국전력거래소_실시간예비력가격_20260630.csv`를 함께 사용한다.
-  SMP는 #27 결과와 대조를 통과한 점 예측을
-  `data/processed/forecast/smp_forecast_distribution_2025.csv`에 보관해 연결한다.
-  2026-11-16 받은 `smp_forecast.csv`(SHA-256 앞 12자리 `1ac686d36271`)는 기존 보고값과 달랐다.
-  업로드 파일은 그대로 보관하고, 기존 파일(`b4880632dab1`)을 위 배전망 전용 경로에 복사했다.
+  SMP는 공통 입력 `data/processed/forecast/smp_forecast.csv` 하나로 연결한다.
+  2026-11-19 공유받은 파일(SHA-256 앞 12자리 `bc4fe021bf8d`)로 교체했다.
+  이 파일의 점 예측 두 열은 #27 배전망 결과에 사용한 입력과 27,792행 모두 일치하며,
+  실제 계산 코드가 읽는 579개 가격 예측 구간도 동일하다. 추가 분위수·확률 열과 일부
+  `p_low` 값은 다르지만 현재 배전망 계산의 가격 입력에는 사용하지 않는다.
+  별도 배전망용 입력 CSV는 두지 않는다. 저장 아카이브의 출처 경로·해시는 계산 당시
+  기록으로 보존하며, React 화면은 기존 저장 결과를 계속 조회한다.
   국내 예시 2MW/8MWh·고정 2.5MW의 연간 VPP 수입은 176,211,537.22원으로 보고값과 반올림 범위 내 일치한다.
   데이터 파일은 Git 관리 대상이 아니므로 다른 컴퓨터에서는 해당 입력 파일도 함께 배치해야 한다.
   CLI로 미리 연결하려면 프로젝트 루트에서 다음을 실행한다:
