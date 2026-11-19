@@ -17,7 +17,7 @@ SPO+(Elmachtoub & Grigas, "Smart Predict, then Optimize", Management Science 68(
 분위수·확률·실측 열은 기준 파일 그대로 둔다.
 그래서 `distribution_backtest --forecast` 에 바로 넣는다.
 
-    python -m vpp.spo_forecast --base data/processed/forecast/smp_forecast_distribution_2025.csv \
+    python -m vpp.spo_forecast --base data/processed/forecast/smp_forecast.csv \
         --generation artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet \
         --out data/processed/forecast/smp_forecast_spo_2025.csv
 

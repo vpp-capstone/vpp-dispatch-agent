@@ -70,6 +70,10 @@ Git에는 `data/reference/`, `data/sample/`과 근거 보존용 열화·용량�
 | 발전량 담당 | `generation_model_metrics.csv`, `generation_ensemble_metrics.csv` 등 지표·요약 | `data/processed/generation_forecast/` |
 | SMP 담당    | `smp_forecast.csv` (`smp_metrics.csv`) | `data/processed/forecast/` |
 
+배전망 시연도 같은 `data/processed/forecast/smp_forecast.csv`를 사용한다.
+별도 이름의 SMP 입력 파일은 필요하지 않다. 현재 연결한 공유 파일의 확인 기록은
+[운영 대시보드 안내](docs/operator_dashboard.md)에 적었다.
+
 발전량 예측 산출물과 모델은 Git에서 제외되므로 Drive로 공유한다. 2025 `operational/` 파일은 실측값 없이 운영계획 입력에 사용하고,
 `evaluation/` 파일은 동일한 고정 예측값에 실측 발전량을 붙여 사후 평가에만 사용한다.
 

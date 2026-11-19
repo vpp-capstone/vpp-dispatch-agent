@@ -1,7 +1,7 @@
 # Existing calculation functions are reused; published annual results are never overwritten.
 generation: artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet
-# Point predictions reconciled to #27; the newly uploaded smp_forecast.csv differs.
-forecast: data/processed/forecast/smp_forecast_distribution_2025.csv
+# Shared SMP input; point predictions reconciled to the published #27 results.
+forecast: data/processed/forecast/smp_forecast.csv
 market: data/processed/market/market_hourly.csv
 fcr:
   - data/processed/market/fcr_hourly.csv
