@@ -10,17 +10,22 @@ import {
   ReplayControls,
 } from "../components/Shared";
 import { Timeline } from "../components/Timeline";
+import { PeriodReplay } from "../components/PeriodReplay";
 
 export function Overview({
   data,
   state,
   dispatch,
   navigate,
+  mode,
+  setMode,
 }: {
   data: Snapshot;
   state: Workspace;
   dispatch: Dispatch<Action>;
   navigate: (p: Page) => void;
+  mode: "day" | "period";
+  setMode: (m: "day" | "period") => void;
 }) {
   const point = data.hours[state.hour];
   const worst = data.hours.reduce((max, h) =>
@@ -34,6 +39,47 @@ export function Overview({
     dispatch({ type: "hour", hour: h });
     navigate(page);
   };
+  const modeSwitch = (
+    <div className="mode-switch" role="tablist" aria-label="재생 단위">
+      <button
+        role="tab"
+        aria-selected={mode === "day"}
+        onClick={() => setMode("day")}
+      >
+        하루 재생
+      </button>
+      <button
+        role="tab"
+        aria-selected={mode === "period"}
+        onClick={() => {
+          if (state.playing) dispatch({ type: "play" });
+          setMode("period");
+        }}
+      >
+        기간 재생
+      </button>
+    </div>
+  );
+  if (mode === "period")
+    return (
+      <>
+        <div className="eyebrow">운영 현황 · 저장 결과 기간 재생</div>
+        <h1>기간 동안 수입이 쌓이는 흐름을 확인합니다</h1>
+        <p className="subtitle">
+          {data.title} · 하루 전 계획 → 실행 → 정산 결과를 날짜순으로 누적합니다
+        </p>
+        {modeSwitch}
+        <PeriodReplay
+          source={data.source}
+          selection={data.selection}
+          dates={data.dates}
+          onOpenDay={(day) => {
+            setMode("day");
+            dispatch({ type: "day", day });
+          }}
+        />
+      </>
+    );
   return (
     <>
       <div className="eyebrow">운영 현황 · 저장 결과 재생</div>
@@ -47,6 +93,7 @@ export function Overview({
       <p className="subtitle">
         {data.date} · {data.title} · 선택한 결과 묶음의 시간별 흐름
       </p>
+      {modeSwitch}
       <Stats
         items={[
           {

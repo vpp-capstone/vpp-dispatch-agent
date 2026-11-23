@@ -72,3 +72,28 @@ export interface Snapshot {
     report: string;
   };
 }
+export interface PeriodDay {
+  date: string;
+  plannedSupply: number;
+  actualSupply: Nullable;
+  plannedCharge: number;
+  plannedDischarge: number;
+  charge: Nullable;
+  discharge: Nullable;
+  plannedSoc: Nullable;
+  soc: Nullable;
+  shortfall: Nullable;
+  plannedIncome: Nullable;
+  income: Nullable;
+}
+export interface Period {
+  source: Source;
+  selection: string;
+  start: string;
+  end: string;
+  dates: string[];
+  incomeLabel: string;
+  executionAvailable: boolean;
+  days: PeriodDay[];
+  snapshot: string;
+}

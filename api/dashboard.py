@@ -336,6 +336,139 @@ def portfolio_snapshot(root: Path, selection: str, selected: date) -> dict:
     }
 
 
+MAX_PERIOD_DAYS = 366
+
+
+def period_frame(frame: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
+    """Saved rows for [start, end]; every day must hold exactly 00–23h (no padding)."""
+    if start > end:
+        raise ValueError("시작일이 종료일보다 늦습니다.")
+    if (end - start).days + 1 > MAX_PERIOD_DAYS:
+        raise ValueError(f"기간은 최대 {MAX_PERIOD_DAYS}일까지 조회합니다.")
+    ts = pd.to_datetime(frame.ts)
+    block = frame[ts.dt.date.between(start, end)].copy()
+    block["day"] = pd.to_datetime(block.ts).dt.strftime("%Y-%m-%d")
+    expected = pd.date_range(start, end, freq="D").strftime("%Y-%m-%d").tolist()
+    counts = block.groupby("day").size()
+    missing = [d for d in expected if counts.get(d, 0) != 24]
+    if missing:
+        raise ValueError(f"저장 결과에 00–23시가 완전하지 않은 날이 있습니다: {missing[0]}")
+    return block
+
+
+def distribution_period(root: Path, candidate: str, start: date, end: date) -> dict:
+    rows, _ = load_display(root)
+    match = rows[rows.id.eq(candidate)]
+    if match.empty:
+        raise LookupError("저장된 결과에 없는 설비입니다.")
+    row = match.iloc[0]
+    hourly, _, archive_id = load_archive(root, row)
+    block = period_frame(hourly, start, end)
+    capacity = float(row.ess_energy_mwh)
+    days = []
+    for day, g in block.groupby("day", sort=True):
+        days.append(
+            {
+                "date": day,
+                "plannedSupply": float(g.committed_sell_mwh.sum()),
+                "actualSupply": float(g.supply_mwh.sum()),
+                "plannedCharge": float(g.planned_charge_mwh.sum()),
+                "plannedDischarge": float(g.planned_discharge_mwh.sum()),
+                "charge": float(g.charge_mwh.sum()),
+                "discharge": float(g.discharge_mwh.sum()),
+                "plannedSoc": float(g.planned_energy_end_mwh.iloc[-1] / capacity * 100),
+                "soc": float(g.soc_end.iloc[-1] * 100),
+                "shortfall": float(g.shortfall_mwh.sum()),
+                "plannedIncome": None,
+                "income": float(g.vpp_income_krw.sum()),
+            }
+        )
+    return {
+        "source": "distribution",
+        "selection": candidate,
+        "start": str(start),
+        "end": str(end),
+        "dates": dates(hourly),
+        "incomeLabel": "VPP 귀속 수입",
+        "executionAvailable": True,
+        "days": days,
+        "snapshot": archive_id,
+    }
+
+
+def portfolio_period(root: Path, selection: str, start: date, end: date) -> dict:
+    _, options = releases(root)
+    release = next((r for r in options if r["id"] == selection), None)
+    if release is None:
+        raise LookupError("사용 가능한 결과 묶음이 아닙니다.")
+    folder = resolve_project_path(root, release["backtest"])
+    if read_json(folder / "validation.json").get("plan_checks_all_passed") is not True:
+        raise ValueError("계획 검산을 통과한 결과만 표시합니다.")
+    data = load_experiment(folder)
+    plan = data["plan"] if data["plan"] is not None else data["forecast"]
+    block = period_frame(plan, start, end)
+    execution = (data.get("execution") or {}).get("executed")
+    days = []
+    for day, g in block.groupby("day", sort=True):
+        ex = execution[execution.ts.isin(g.ts)] if execution is not None else None
+        complete = (
+            ex is not None and len(ex) == 24 and not ex.settlement_basis.eq("price_missing").any()
+        )
+        days.append(
+            {
+                "date": day,
+                "plannedSupply": float(g.sell_mwh.sum()),
+                "actualSupply": number(ex.supply_mwh.sum())
+                if complete and "supply_mwh" in ex
+                else None,
+                "plannedCharge": float(g.charge_mwh.sum()),
+                "plannedDischarge": float(g.discharge_mwh.sum()),
+                "charge": None,
+                "discharge": None,
+                "plannedSoc": number(g.soc_end.iloc[-1] * 100),
+                "soc": None,
+                "shortfall": None,
+                "plannedIncome": number(
+                    plan_revenue_breakdown(g, data["ess"])["net_revenue_krw"]
+                ),
+                "income": number(ex.realized_net_krw.sum()) if complete else None,
+            }
+        )
+    return {
+        "source": "portfolio",
+        "selection": selection,
+        "start": str(start),
+        "end": str(end),
+        "dates": dates(plan),
+        "incomeLabel": "운영 순수익",
+        "executionAvailable": execution is not None,
+        "days": days,
+        "snapshot": release["id"],
+    }
+
+
+@router.get("/period")
+def period(
+    source: Literal["portfolio", "distribution"],
+    selection: str = Query(min_length=1, max_length=180),
+    start: date = date(2025, 1, 1),
+    end: date = date(2025, 12, 31),
+):
+    """Daily totals of the saved result over a period, for the cumulative demo replay."""
+    try:
+        result = (portfolio_period if source == "portfolio" else distribution_period)(
+            project_root(), selection, start, end
+        )
+        json.dumps(result, allow_nan=False)
+        return result
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(422, f"저장 결과 확인 필요: {exc}") from exc
+
+
 @router.get("/catalog")
 def catalog():
     root = project_root()
