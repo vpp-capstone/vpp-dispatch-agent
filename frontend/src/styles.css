@@ -1382,3 +1382,105 @@ textarea {
     transition: none !important;
   }
 }
+
+/* Period replay (운영계획 · 기간 재생) */
+.mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 4px 0 18px;
+}
+.mode-switch button {
+  border: 0;
+  background: white;
+  color: var(--muted);
+  padding: 8px 16px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mode-switch button[aria-selected="true"] {
+  background: var(--teal);
+  color: white;
+}
+.period-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin: 6px 0 14px;
+}
+.period-controls label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.preset-group {
+  display: flex;
+  gap: 6px;
+}
+.preset-group .button.active {
+  border-color: var(--teal);
+  color: var(--teal);
+  background: var(--soft);
+}
+.period-chart {
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px 4px;
+  background: white;
+}
+.period-chart figcaption {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.period-chart svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.period-chart text {
+  font-size: 10px;
+  fill: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.period-chart .grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.period-chart .line {
+  fill: none;
+  stroke: var(--teal);
+  stroke-width: 2;
+}
+.period-chart .area {
+  fill: var(--soft);
+}
+.period-chart .dot {
+  fill: var(--teal);
+}
+.period-chart rect.charge,
+.swatch.charge {
+  fill: var(--sun);
+  background: var(--sun);
+}
+.period-chart rect.discharge,
+.swatch.discharge {
+  fill: var(--teal);
+  background: var(--teal);
+}
+.period-chart .today rect {
+  opacity: 1;
+  stroke: var(--ink);
+  stroke-width: 0.5;
+}
+.swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}

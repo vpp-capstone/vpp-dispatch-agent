@@ -59,6 +59,8 @@ function Workspace({ catalog }: { catalog: Catalog }) {
   const { page, navigate } = useRoute(customer ? "plan" : "welcome");
   const isEntry = page === "welcome" || page === "onboarding";
   const [returnPage, setReturnPage] = useState<Page>("plan");
+  // Kept here so returning from a selected day keeps the period replay tab.
+  const [overviewMode, setOverviewMode] = useState<"day" | "period">("day");
   const [storageWarning, setStorageWarning] = useState("");
   const params = new URLSearchParams({
     source: state.source,
@@ -378,6 +380,8 @@ function Workspace({ catalog }: { catalog: Catalog }) {
                   state={state}
                   dispatch={dispatch}
                   navigate={to}
+                  mode={overviewMode}
+                  setMode={setOverviewMode}
                 />
               )}
               {page === "plan" && (

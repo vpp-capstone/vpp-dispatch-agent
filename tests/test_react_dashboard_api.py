@@ -197,3 +197,53 @@ def test_distribution_snapshot_keeps_missing_plan_income_and_exact_receipt_sum(
     assert all(h["plannedIncome"] is None for h in result["hours"])
     assert result["provenance"]["snapshot"] == "archive"
     assert result["selection"] == "A"
+
+
+def test_period_sums_saved_days_and_rejects_incomplete_ranges(monkeypatch, tmp_path):
+    frame = pd.DataFrame(
+        {
+            "ts": pd.date_range("2025-05-01", periods=72, freq="h"),
+            "committed_sell_mwh": 1.5,
+            "supply_mwh": 1.4,
+            "planned_charge_mwh": 0.5,
+            "planned_discharge_mwh": 0.25,
+            "charge_mwh": 0.4,
+            "discharge_mwh": 0.2,
+            "planned_energy_end_mwh": 4.0,
+            "soc_end": 0.5,
+            "shortfall_mwh": 0.1,
+            "vpp_income_krw": 10.0,
+        }
+    )
+    row = pd.DataFrame([{"id": "A", "ess_energy_mwh": 8.0}])
+    monkeypatch.setattr(adapter, "load_display", lambda root: (row, ""))
+    monkeypatch.setattr(adapter, "load_archive", lambda *a: (frame, {}, "archive"))
+    result = adapter.distribution_period(tmp_path, "A", date(2025, 5, 1), date(2025, 5, 2))
+    assert [d["date"] for d in result["days"]] == ["2025-05-01", "2025-05-02"]
+    first = result["days"][0]
+    assert first["income"] == pytest.approx(240)
+    assert first["actualSupply"] == pytest.approx(33.6)
+    assert first["plannedSoc"] == pytest.approx(50) and first["soc"] == pytest.approx(50)
+    assert first["plannedIncome"] is None  # not stored for this allocation basis
+    with pytest.raises(ValueError, match="완전하지"):
+        adapter.distribution_period(tmp_path, "A", date(2025, 4, 30), date(2025, 5, 2))
+    with pytest.raises(ValueError, match="시작일"):
+        adapter.distribution_period(tmp_path, "A", date(2025, 5, 3), date(2025, 5, 1))
+    with pytest.raises(ValueError, match="최대"):
+        adapter.period_frame(frame, date(2024, 1, 1), date(2025, 5, 3))
+
+
+def test_period_portfolio_reports_plan_without_inventing_execution(portfolio, client):
+    response = client.get(
+        "/api/v1/dashboard/period",
+        params={"source": "portfolio", "selection": "verified",
+                "start": "2024-06-01", "end": "2024-06-01"},
+    )
+    assert response.status_code == 200, response.text
+    (day,) = response.json()["days"]
+    assert day["income"] is None and day["actualSupply"] is None
+    snap = client.get(
+        "/api/v1/dashboard/snapshot",
+        params={"source": "portfolio", "selection": "verified", "day": "2024-06-01"},
+    ).json()
+    assert day["plannedIncome"] == pytest.approx(snap["plannedIncome"])
