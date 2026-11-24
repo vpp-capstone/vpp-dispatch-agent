@@ -37,12 +37,19 @@ export interface Hour {
   plannedSoc: number;
   soc: Nullable;
   shortfall: Nullable;
+  fixedSupply: Nullable;
+  fixedCharge: Nullable;
+  fixedDischarge: Nullable;
+  fixedSoc: Nullable;
+  fixedShortfall: Nullable;
   plannedIncome: Nullable;
+  fixedIncome: Nullable;
   income: Nullable;
 }
 export interface MoneyRow {
   label: string;
   planned: Nullable;
+  fixed: Nullable;
   actual: Nullable;
 }
 export interface Snapshot {
@@ -60,9 +67,12 @@ export interface Snapshot {
   hours: Hour[];
   ledger: MoneyRow[];
   plannedIncome: Nullable;
+  fixedPlanIncome: Nullable;
   actualIncome: Nullable;
+  cumulativePlannedIncome: Nullable;
+  cumulativeFixedIncome: Nullable;
   cumulativeIncome: Nullable;
-  trend: { month: string; planned: Nullable; actual: Nullable }[];
+  trend: { month: string; planned: Nullable; fixed: Nullable; actual: Nullable }[];
   warnings: string[];
   provenance: {
     snapshot: string;
@@ -83,7 +93,13 @@ export interface PeriodDay {
   plannedSoc: Nullable;
   soc: Nullable;
   shortfall: Nullable;
+  fixedSupply: Nullable;
+  fixedCharge: Nullable;
+  fixedDischarge: Nullable;
+  fixedSoc: Nullable;
+  fixedShortfall: Nullable;
   plannedIncome: Nullable;
+  fixedIncome: Nullable;
   income: Nullable;
 }
 export interface Period {

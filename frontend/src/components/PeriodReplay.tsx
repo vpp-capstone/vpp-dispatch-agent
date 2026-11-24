@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import type { Period, Source } from "../types";
 import { useApi } from "../hooks/useApi";
-import { money, number } from "../lib/format";
+import { difference, money, number } from "../lib/format";
 import {
   cumulative,
   dayCharge,
@@ -215,9 +215,38 @@ export function PeriodReplay({
           <Stats
             items={[
               {
-                label: `누적 ${data.incomeLabel}`,
-                value: money(totals.income),
-                hint: `${range.start} ~ ${today.date} · ${executed ? "실행 백테스트" : "계획 기준"}`,
+                label: "누적 예상 계획 수입",
+                value: money(totals.plannedIncome),
+                hint: `${range.start} ~ ${today.date}`,
+                tone: "plan",
+              },
+              {
+                label: "누적 고정계획 사후 수입",
+                value: money(totals.fixedIncome),
+                hint: "실측 적용 · ESS 추가 대응 없음",
+                tone: "counterfactual",
+              },
+              {
+                label: `누적 실행 ${data.incomeLabel}`,
+                value: money(totals.executedIncome ?? totals.income),
+                hint: executed ? "실행 백테스트" : "실행 결과 없음",
+                tone: "primary",
+              },
+              {
+                label: "발전량·가격 예측 오차 영향",
+                value: money(difference(totals.fixedIncome, totals.plannedIncome)),
+                tone:
+                  (difference(totals.fixedIncome, totals.plannedIncome) ?? 0) < 0
+                    ? "loss"
+                    : "gain",
+              },
+              {
+                label: "ESS 실행 조정 효과",
+                value: money(difference(totals.executedIncome, totals.fixedIncome)),
+                tone:
+                  (difference(totals.executedIncome, totals.fixedIncome) ?? 0) < 0
+                    ? "loss"
+                    : "gain",
               },
               {
                 label: executed ? "누적 실행 공급" : "누적 공급계획",

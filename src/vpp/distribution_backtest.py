@@ -59,6 +59,14 @@ EXEC = "forecast_exec"
 OPERATIONS = ("forecast", "perfect", EXEC)
 # 선로 상한을 넘지 않도록 실행 중 초과 판매는 하지 않는다 (남는 전력은 충전 또는 감축)
 EXEC_POLICY = RuleBasedPolicy(surplus_order=("reduce_discharge", "charge", "curtail"))
+# Counterfactual: keep the issued ESS command, allowing only the minimum corrections needed
+# for actual generation, SOC and power limits.  It never adds discharge or sells surplus.
+FIXED_PLAN_POLICY = RuleBasedPolicy(
+    extra_discharge=False,
+    surplus_order=("curtail",),
+    name="fixed_plan_no_recourse_v0",
+    status="counterfactual_minimum_feasibility_adjustment",
+)
 DISPATCH_NOTE = "급전지시량 = 하루전 확정 판매량, 공급가능용량 = 확정 판매량 (감발 지시 없음 가정)"
 
 
@@ -364,6 +372,7 @@ def _run_exec(
     if battery_key != BASELINE:
         ess = ess_for(base_ess, cfg, cfg.batteries[battery_key], case)
         energy = ess.initial_energy_mwh
+    fixed_energy = energy
     parts = []
     for d in days:
         idx = pd.date_range(d, periods=48, freq="h")
@@ -419,6 +428,23 @@ def _run_exec(
             out = execute_plan(committed, actual_gen, energy, ess, EXEC_POLICY)
             energy = out.energy_end_mwh
             ex = out.hourly.drop(columns=["ts", "rec_krw_per_mwh"])
+            fixed = execute_plan(
+                committed, actual_gen, fixed_energy, ess, FIXED_PLAN_POLICY
+            )
+            fixed_energy = fixed.energy_end_mwh
+            fixed_columns = {
+                "charge_mwh": "fixed_plan_charge_mwh",
+                "discharge_mwh": "fixed_plan_discharge_mwh",
+                "supply_mwh": "fixed_plan_supply_mwh",
+                "curtailment_mwh": "fixed_plan_curtailment_mwh",
+                "shortfall_mwh": "fixed_plan_shortfall_mwh",
+                "energy_start_mwh": "fixed_plan_energy_start_mwh",
+                "energy_end_mwh": "fixed_plan_energy_end_mwh",
+                "soc_end": "fixed_plan_soc_end",
+                "actions": "fixed_plan_actions",
+            }
+            for source, target in fixed_columns.items():
+                ex[target] = fixed.hourly[source].to_numpy()
         ex.insert(0, "ts", idx[:24])
         ex["price_krw_per_mwh"] = act[:24]
         ex["realtime_price_krw_per_mwh"] = w["smp_rt_krw_per_mwh"].to_numpy(float)[:24]
@@ -429,6 +455,41 @@ def _run_exec(
     if not parts:
         raise ValueError(f"계산할 날이 없습니다: {case.name} {battery_key} {EXEC}")
     return pd.concat(parts, ignore_index=True)
+
+
+def income_scenario_hourly(hourly: pd.DataFrame, scenario: str) -> pd.DataFrame:
+    """Normalize one saved income comparison scenario for ``settle_exec``.
+
+    ``expected_plan`` uses forecast generation/SMP and has no deviation by definition.
+    ``fixed_plan`` uses actual generation/SMP but replays the issued ESS command with only
+    physical feasibility corrections. ``executed`` returns the adaptive execution unchanged.
+    """
+    if scenario == "executed":
+        return hourly.copy()
+    out = hourly.copy()
+    if scenario == "expected_plan":
+        out["supply_mwh"] = out["committed_sell_mwh"]
+        out["charge_mwh"] = out["planned_charge_mwh"]
+        out["discharge_mwh"] = out["planned_discharge_mwh"]
+        out["price_krw_per_mwh"] = out["plan_price_krw_per_mwh"]
+        out["realtime_price_krw_per_mwh"] = out["plan_price_krw_per_mwh"]
+    elif scenario == "fixed_plan":
+        for target in (
+            "supply_mwh",
+            "charge_mwh",
+            "discharge_mwh",
+            "energy_start_mwh",
+            "energy_end_mwh",
+            "soc_end",
+            "shortfall_mwh",
+        ):
+            source = f"fixed_plan_{target}"
+            if source not in out:
+                raise KeyError(f"고정계획 사후 실행 열이 없습니다: {source}")
+            out[target] = out[source]
+    else:
+        raise ValueError("scenario는 expected_plan, fixed_plan, executed 중 하나여야 합니다.")
+    return out
 
 
 def settle_exec(hourly: pd.DataFrame, ess: EssParams, resource_capacity_mw: float) -> pd.DataFrame:

@@ -88,7 +88,7 @@ def test_archive_integrity_scope_and_capacity_are_checked(tmp_path, monkeypatch)
     file = tmp_path / "hourly.parquet"
     file.write_bytes(b"modified")
     meta = {
-        "schema": 1,
+        "schema": 2,
         "operation": "forecast_exec",
         "basis": "standard",
         "ess_capacity_payment": False,
@@ -164,6 +164,20 @@ def test_distribution_snapshot_keeps_missing_plan_income_and_exact_receipt_sum(
             "planned_energy_end_mwh": 4.0,
             "soc_end": 0.5,
             "shortfall_mwh": 0.1,
+            "fixed_plan_supply_mwh": 1.35,
+            "fixed_plan_charge_mwh": 0.45,
+            "fixed_plan_discharge_mwh": 0.0,
+            "fixed_plan_energy_end_mwh": 3.8,
+            "fixed_plan_soc_end": 0.475,
+            "fixed_plan_shortfall_mwh": 0.15,
+            "expected_plan_vpp_ess_krw": 80.0,
+            "expected_plan_vpp_solar_cp_krw": 20.0,
+            "expected_plan_vpp_penalty_krw": 0.0,
+            "expected_plan_vpp_income_krw": 100.0,
+            "fixed_plan_vpp_ess_krw": 90.0,
+            "fixed_plan_vpp_solar_cp_krw": 20.0,
+            "fixed_plan_vpp_penalty_krw": -15.0,
+            "fixed_plan_vpp_income_krw": 95.0,
             "vpp_ess_krw": 100.0,
             "vpp_solar_cp_krw": 20.0,
             "vpp_penalty_krw": -10.0,
@@ -193,8 +207,9 @@ def test_distribution_snapshot_keeps_missing_plan_income_and_exact_receipt_sum(
     assert result["actualIncome"] == 2640
     assert result["cumulativeIncome"] == 2640  # no future-day lookahead
     assert sum(r["actual"] for r in result["ledger"]) == result["actualIncome"]
-    assert result["plannedIncome"] is None
-    assert all(h["plannedIncome"] is None for h in result["hours"])
+    assert result["plannedIncome"] == 2400
+    assert result["fixedPlanIncome"] == 2280
+    assert all(h["fixedIncome"] == 95 for h in result["hours"])
     assert result["provenance"]["snapshot"] == "archive"
     assert result["selection"] == "A"
 
@@ -212,6 +227,13 @@ def test_period_sums_saved_days_and_rejects_incomplete_ranges(monkeypatch, tmp_p
             "planned_energy_end_mwh": 4.0,
             "soc_end": 0.5,
             "shortfall_mwh": 0.1,
+            "fixed_plan_supply_mwh": 1.35,
+            "fixed_plan_charge_mwh": 0.45,
+            "fixed_plan_discharge_mwh": 0.2,
+            "fixed_plan_soc_end": 0.48,
+            "fixed_plan_shortfall_mwh": 0.15,
+            "expected_plan_vpp_income_krw": 8.0,
+            "fixed_plan_vpp_income_krw": 9.0,
             "vpp_income_krw": 10.0,
         }
     )
@@ -224,7 +246,8 @@ def test_period_sums_saved_days_and_rejects_incomplete_ranges(monkeypatch, tmp_p
     assert first["income"] == pytest.approx(240)
     assert first["actualSupply"] == pytest.approx(33.6)
     assert first["plannedSoc"] == pytest.approx(50) and first["soc"] == pytest.approx(50)
-    assert first["plannedIncome"] is None  # not stored for this allocation basis
+    assert first["plannedIncome"] == pytest.approx(192)
+    assert first["fixedIncome"] == pytest.approx(216)
     with pytest.raises(ValueError, match="완전하지"):
         adapter.distribution_period(tmp_path, "A", date(2025, 4, 30), date(2025, 5, 2))
     with pytest.raises(ValueError, match="시작일"):

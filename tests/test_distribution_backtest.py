@@ -176,6 +176,23 @@ def test_forecast_exec_never_oversells_and_settles():
         ess = (
             BASE if battery == db.BASELINE else db.ess_for(BASE, CFG, CFG.batteries[battery], case)
         )
+        if battery != db.BASELINE:
+            assert {
+                "fixed_plan_supply_mwh",
+                "fixed_plan_charge_mwh",
+                "fixed_plan_discharge_mwh",
+                "fixed_plan_energy_start_mwh",
+                "fixed_plan_energy_end_mwh",
+            } <= set(h)
+            assert np.allclose(
+                h.fixed_plan_energy_end_mwh.iloc[:-1],
+                h.fixed_plan_energy_start_mwh.iloc[1:],
+            )
+            expected = db.income_scenario_hourly(h, "expected_plan")
+            fixed = db.income_scenario_hourly(h, "fixed_plan")
+            assert np.allclose(expected.supply_mwh, h.committed_sell_mwh)
+            assert np.allclose(expected.price_krw_per_mwh, h.plan_price_krw_per_mwh)
+            assert np.allclose(fixed.supply_mwh, h.fixed_plan_supply_mwh)
         row = db.operating_row_from_settlement(
             db.settle_exec(h, ess, 5.7),
             case=case.name, battery=battery, operation=db.EXEC,

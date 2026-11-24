@@ -14,12 +14,17 @@ import { Term } from "./Help";
 export function Stats({
   items,
 }: {
-  items: { label: string; value: string; hint?: string }[];
+  items: {
+    label: string;
+    value: string;
+    hint?: string;
+    tone?: "plan" | "counterfactual" | "primary" | "gain" | "loss";
+  }[];
 }) {
   return (
     <dl className="stats">
       {items.map((item) => (
-        <div key={item.label}>
+        <div key={item.label} className={item.tone ? `stat-${item.tone}` : undefined}>
           <dt>
             <Term label={item.label} />
           </dt>
