@@ -12,24 +12,41 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+
+def _ttf_font_path() -> Path | None:
+    candidates = (
+        Path("C:/Windows/Fonts/malgun.ttf"),
+        Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+        Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+    )
+    return next((value for value in candidates if value.exists()), None)
+
+
+def _cid_font() -> str:
+    """Register ReportLab's built-in Korean font for minimal CI images."""
+    fallback = "HYSMyeongJo-Medium"
+    if fallback not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(UnicodeCIDFont(fallback))
+    return fallback
 
 
 def _font() -> str:
     name = "EconomicsKorean"
     if name in pdfmetrics.getRegisteredFontNames():
         return name
-    candidates = (
-        Path("C:/Windows/Fonts/malgun.ttf"),
-        Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
-        Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
-    )
-    path = next((value for value in candidates if value.exists()), None)
-    if path is None:
-        raise FileNotFoundError("PDF 생성에 필요한 한글 글꼴을 찾을 수 없습니다.")
-    pdfmetrics.registerFont(TTFont(name, str(path)))
-    return name
+    path = _ttf_font_path()
+    if path is not None:
+        pdfmetrics.registerFont(TTFont(name, str(path)))
+        return name
+
+    # GitHub Actions 같은 최소 Ubuntu 환경에는 Nanum 글꼴이 없을 수 있다.
+    # ReportLab이 기본 제공하는 한국어 CID 글꼴을 사용하면 시스템 패키지 없이도
+    # PDF 생성 자체는 동일하게 검증할 수 있다. Docker에서는 위의 Nanum 글꼴을 쓴다.
+    return _cid_font()
 
 
 def _number(value, digits: int = 1) -> str:

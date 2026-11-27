@@ -166,6 +166,16 @@ def test_saved_economics_pdf_download(client):
     assert download.headers["content-disposition"].endswith('.pdf"')
 
 
+def test_economics_pdf_download_without_system_korean_font(client, monkeypatch):
+    import api.economics_pdf as economics_pdf
+
+    monkeypatch.setattr(economics_pdf, "_font", economics_pdf._cid_font)
+    selection = "cap_2.50MW|new_2025_bnef|2:8"
+    download = client.get("/api/v1/dashboard/economics.pdf", params={"selection": selection})
+    assert download.status_code == 200
+    assert download.content.startswith(b"%PDF-")
+
+
 def test_distribution_snapshot_keeps_missing_plan_income_and_exact_receipt_sum(
     monkeypatch, tmp_path
 ):
