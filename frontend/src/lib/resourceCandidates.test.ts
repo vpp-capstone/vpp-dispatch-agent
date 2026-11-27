@@ -15,6 +15,9 @@ const candidate = (
   capacity: 8,
   income: 1,
   npv: null,
+  irr: null,
+  discountedPaybackYears: null,
+  neededAnnualSupport: null,
 });
 const domestic = "cap_2.50MW|kr_notice_example|2:8";
 const bnef = "cap_2.50MW|new_2025_bnef|2:8";

@@ -277,6 +277,37 @@ def test_standard_basis_applies_notice_shares():
     assert set(tot["ess_capacity_payment"]) == {False, True}
 
 
+def test_dashboard_summary_matches_saved_standard_base_metrics():
+    operating = _with_breakdown().assign(operation="forecast_exec")
+    dashboard, cashflows = pe.dashboard_economics(CFG, operating)
+    full, _ = pe.summarize(CFG, operating)
+    expected_rows = full[
+        full["operation"].eq("forecast_exec")
+        & full["basis"].eq("standard")
+        & full["revenue_scenario"].eq("base")
+    ]
+    assert len(dashboard) == 2
+    actual = dashboard[~dashboard["ess_capacity_payment"]].iloc[0]
+    capacity = dashboard[dashboard["ess_capacity_payment"]].iloc[0]
+    expected = expected_rows[~expected_rows["ess_capacity_payment"]].iloc[0]
+    expected_capacity = expected_rows[expected_rows["ess_capacity_payment"]].iloc[0]
+    assert actual["revenue_reference_year"] == 2025
+    assert actual["revenue_growth_rate"] == 0
+    assert actual["discount_rate"] == pytest.approx(0.07)
+    assert actual["cost_escalation"] == pytest.approx(0.02)
+    for column in ("npv_krw", "irr", "discounted_payback_years", "needed_annual_support_krw"):
+        assert actual[column] == pytest.approx(expected[column])
+        assert capacity[column] == pytest.approx(expected_capacity[column])
+    assert capacity["annual_ess_capacity_payment_krw"] == pytest.approx(0.5e8)
+    assert capacity["annual_market_revenue_krw"] - actual[
+        "annual_market_revenue_krw"
+    ] == pytest.approx(0.5e8)
+    assert len(cashflows) == 2 * (CFG.project_years + 1)
+    assert set(cashflows["year"]) == set(range(CFG.project_years + 1))
+    assert set(cashflows["ess_capacity_payment"]) == {False, True}
+    assert {"net", "cumulative_discounted", "battery_replacement"} <= set(cashflows)
+
+
 def test_needed_annual_support_closes_npv_gap():
     b = CFG.batteries["kr_notice_example"]
     op = pe.Operating(market_revenue_krw=2e8, solar_to_vpp_mwh=0.0, ess_throughput_mwh=3000.0)

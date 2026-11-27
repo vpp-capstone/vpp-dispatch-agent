@@ -161,6 +161,7 @@ class EconomicsConfig:
     split_mode: str
     ppa_prices: tuple[float, ...]
     solar_capex_krw: float | None
+    revenue_reference_year: int = 2025
     batteries: dict[str, Battery] = field(default_factory=dict)
     standard_vpp_shares: dict[str, float] = field(default_factory=dict)
     ess_cp_scenarios: tuple[bool, ...] = (False,)
@@ -189,6 +190,7 @@ class EconomicsConfig:
             split_mode=str(s["mode"]),
             ppa_prices=tuple(float(p) for p in (ppa if isinstance(ppa, list) else [ppa])),
             solar_capex_krw=_opt_float(s.get("solar_capex_krw")),
+            revenue_reference_year=int(b.get("revenue_reference_year", 2025)),
             batteries={k: Battery(key=k, **v) for k, v in raw["batteries"].items()},
             standard_vpp_shares={
                 k: float(v) for k, v in (s.get("standard_vpp_shares") or {}).items()
@@ -568,6 +570,86 @@ def summarize(cfg: EconomicsConfig, operating: pd.DataFrame) -> tuple[pd.DataFra
     return pd.DataFrame(rows), pd.concat(flows, ignore_index=True)
 
 
+def dashboard_economics(
+    cfg: EconomicsConfig, operating: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Create the saved base-case summary and cashflows consumed by the dashboard."""
+    unknown = set(operating["battery"]) - set(cfg.batteries) - {BASELINE_BATTERY}
+    if unknown:
+        raise ValueError(f"설정에 없는 배터리: {sorted(unknown)}")
+    rows, flows = [], []
+    for view in _operating_views(cfg, operating):
+        source = view.row
+        if source["operation"] != "forecast_exec" or view.basis != "standard":
+            continue
+        battery = cfg.batteries[source["battery"]]
+        cfg_row = _cfg_for_row(cfg, source)
+        for with_cp in cfg.ess_cp_scenarios:
+            if with_cp and math.isnan(view.ess_cp_vpp_krw):
+                continue
+            capacity_payment = view.ess_cp_vpp_krw if with_cp else 0.0
+            op = Operating(
+                view.op.market_revenue_krw + capacity_payment,
+                view.op.solar_to_vpp_mwh,
+                view.op.ess_throughput_mwh,
+            )
+            metrics = evaluate(
+                cfg_row,
+                battery,
+                op,
+                growth=cfg.revenue_scenarios["base"],
+                ppa_krw_per_kwh=0.0,
+                include_solar_capex=False,
+            )
+            rows.append(
+                {
+                    "case": source["case"],
+                    "battery": source["battery"],
+                    "operation": source["operation"],
+                    "basis": "standard",
+                    "ess_capacity_payment": with_cp,
+                    "revenue_scenario": "base",
+                    "ess_power_mw": cfg_row.ess_power_mw,
+                    "ess_energy_mwh": cfg_row.ess_energy_mwh,
+                    "annual_market_revenue_krw": op.market_revenue_krw,
+                    "annual_ess_capacity_payment_krw": capacity_payment,
+                    "revenue_reference_year": cfg.revenue_reference_year,
+                    "project_years": cfg.project_years,
+                    "revenue_growth_rate": cfg.revenue_scenarios["base"],
+                    "discount_rate": cfg.discount_rate,
+                    "cost_escalation": cfg.cost_escalation,
+                    "battery_price_decline": cfg.battery_price_decline,
+                    "subsidy_rate": cfg.subsidy_rate,
+                    "pcs_life_years": cfg.pcs_life_years,
+                    **metrics,
+                }
+            )
+            flow = cashflow(
+                cfg_row,
+                battery,
+                op,
+                growth=cfg.revenue_scenarios["base"],
+                ppa_krw_per_kwh=0.0,
+                include_solar_capex=False,
+            ).reset_index()
+            metadata = (
+                ("ess_capacity_payment", with_cp),
+                ("ess_energy_mwh", cfg_row.ess_energy_mwh),
+                ("ess_power_mw", cfg_row.ess_power_mw),
+                ("battery", source["battery"]),
+                ("case", source["case"]),
+            )
+            for key, value in metadata:
+                flow.insert(0, key, value)
+            flows.append(flow)
+    return pd.DataFrame(rows), pd.concat(flows, ignore_index=True)
+
+
+def summarize_dashboard(cfg: EconomicsConfig, operating: pd.DataFrame) -> pd.DataFrame:
+    """Create only the saved base-case summary consumed by the read-only dashboard."""
+    return dashboard_economics(cfg, operating)[0]
+
+
 def operating_row_from_hourly(
     hourly: pd.DataFrame,
     *,
@@ -630,13 +712,25 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--config", default="config/project_economics_v0.yaml")
     p.add_argument("--operating", required=True, help="운영 백테스트 1년 결과 CSV")
     p.add_argument("--out-dir", default="data/processed/economics")
+    p.add_argument("--dashboard-only", action="store_true",
+                   help="조회 화면에 필요한 기준 시나리오 지표만 빠르게 저장")
     args = p.parse_args(argv)
     cfg = EconomicsConfig.from_yaml(args.config)
-    summary, flows = summarize(cfg, load_operating(args.operating))
+    operating = load_operating(args.operating)
+    if args.dashboard_only:
+        summary, flows = dashboard_economics(cfg, operating)
+    else:
+        summary, flows = summarize(cfg, operating)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     summary.to_csv(out / "economics_summary.csv", index=False, encoding="utf-8-sig")
     flows.to_csv(out / "economics_cashflow.csv", index=False, encoding="utf-8-sig")
+    if args.dashboard_only:
+        print(
+            f"저장: {out / 'economics_summary.csv'}, "
+            f"{out / 'economics_cashflow.csv'} ({len(summary)}개 후보)"
+        )
+        return
     view = summary[(summary["revenue_scenario"] == "base") & ~summary["ess_capacity_payment"]]
     for basis in ("standard", "total"):
         if (view["basis"] == basis).any():
@@ -658,7 +752,10 @@ def main(argv: list[str] | None = None) -> None:
         npv_억=(view["npv_krw"] / 1e8).round(1), irr=(view["irr"] * 100).round(1)
     )
     print(shown.drop(columns="npv_krw").to_string(index=False))
-    print(f"저장: {out / 'economics_summary.csv'}, {out / 'economics_cashflow.csv'}")
+    saved = [str(out / "economics_summary.csv")]
+    if flows is not None:
+        saved.append(str(out / "economics_cashflow.csv"))
+    print(f"저장: {', '.join(saved)}")
 
 
 if __name__ == "__main__":

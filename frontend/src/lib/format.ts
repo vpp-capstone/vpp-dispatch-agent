@@ -13,6 +13,10 @@ export const money = (n: Nullable) =>
     : Math.abs(n) >= 1e8
       ? `${number(n / 1e8, 2)}억 원`
       : `${number(n / 10000)}만 원`;
+export const percent = (n: Nullable) =>
+  n === null ? "보고값 없음" : `${number(n * 100)}%`;
+export const years = (n: Nullable) =>
+  n === null ? "보고값 없음" : `${number(n)}년`;
 export const time = (h: number) => `${String(h).padStart(2, "0")}:00`;
 export const difference = (a: Nullable, b: Nullable): Nullable =>
   a === null || b === null ? null : a - b;

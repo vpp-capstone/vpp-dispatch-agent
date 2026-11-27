@@ -302,6 +302,8 @@ main {
 .stats dt {
   font-size: 11px;
   color: var(--muted);
+  min-height: 40px;
+  line-height: 1.55;
 }
 .stats dd {
   font-size: 24px;
@@ -309,6 +311,23 @@ main {
   letter-spacing: -0.7px;
   margin: 6px 0 0;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.stats .stat-plan dd {
+  color: #315f86;
+}
+.stats .stat-counterfactual dd {
+  color: #8a621f;
+}
+.stats .stat-primary dd {
+  color: #007c72;
+  font-weight: 750;
+}
+.stats .stat-gain dd {
+  color: #24733e;
+}
+.stats .stat-loss dd {
+  color: #b23b3b;
 }
 .stats small {
   display: block;
@@ -1079,6 +1098,11 @@ textarea {
   color: #805928;
   border-left: 3px solid #d9b475;
   padding-left: 12px;
+}
+.economics-detail-action {
+  display: flex;
+  justify-content: flex-end;
+  margin: -8px 0 18px;
 }
 @media (max-width: 760px) {
   .candidate-comparison th,

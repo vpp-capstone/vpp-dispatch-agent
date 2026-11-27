@@ -20,8 +20,9 @@ from dashboard.distribution_display import load_display
 from dashboard.distribution_operation import revenue_breakdown
 from dashboard.operator_simulation import replay_payload
 from dashboard.overview_data import load_experiment
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
+from api.economics_pdf import build_economics_pdf
 from dashboard import distribution_replay as replay
 from vpp.baselines import plan_revenue_breakdown
 from vpp.project_paths import resolve_project_path
@@ -39,6 +40,48 @@ def read_json(path: Path) -> dict:
 
 def number(value):
     return float(value) if value is not None and pd.notna(value) and np.isfinite(value) else None
+
+
+def economics_result(
+    root: Path, selection: str
+) -> tuple[pd.Series, pd.Series, pd.DataFrame, pd.Series | None]:
+    """Load one candidate's saved summary and annual cashflow without recalculation."""
+    rows, _ = load_display(root)
+    matched = rows[rows.id.eq(selection)]
+    if matched.empty:
+        raise LookupError("경제성 후보를 찾을 수 없습니다.")
+    candidate = matched.iloc[0]
+    folder = "economics_operating" if "operating" in candidate.source_file else "economics_sizing"
+    summary_path = within(root, root / "docs/results" / folder / "economics_summary.csv")
+    cashflow_path = within(root, root / "docs/results" / folder / "economics_cashflow.csv")
+    if not summary_path.exists() or not cashflow_path.exists():
+        raise FileNotFoundError("상세 경제성 결과 파일을 먼저 생성해야 합니다.")
+    summary = pd.read_csv(summary_path)
+    cashflows = pd.read_csv(cashflow_path)
+    common = (
+        summary["case"].eq(candidate["case"])
+        & summary["battery"].eq(candidate.battery)
+        & summary["operation"].eq("forecast_exec")
+        & summary["basis"].eq("standard")
+        & summary["revenue_scenario"].eq("base")
+        & summary["ess_power_mw"].eq(candidate.ess_power_mw)
+        & summary["ess_energy_mwh"].eq(candidate.ess_energy_mwh)
+    )
+    summary_cp = summary["ess_capacity_payment"].astype(str).str.lower().eq("true")
+    summary_match = summary[common & ~summary_cp]
+    capacity_match = summary[common & summary_cp]
+    flow_cp = cashflows["ess_capacity_payment"].astype(str).str.lower().eq("true")
+    flow_match = cashflows[
+        cashflows["case"].eq(candidate["case"])
+        & cashflows["battery"].eq(candidate.battery)
+        & cashflows["ess_power_mw"].eq(candidate.ess_power_mw)
+        & cashflows["ess_energy_mwh"].eq(candidate.ess_energy_mwh)
+        & ~flow_cp
+    ].copy()
+    if len(summary_match) != 1 or len(capacity_match) > 1 or flow_match.empty:
+        raise ValueError("선택 후보와 일치하는 상세 경제성 결과가 없습니다.")
+    capacity = capacity_match.iloc[0] if len(capacity_match) == 1 else None
+    return candidate, summary_match.iloc[0], flow_match.sort_values("year"), capacity
 
 
 def within(root: Path, path: Path) -> Path:
@@ -78,7 +121,7 @@ def load_archive(root: Path, row: pd.Series) -> tuple[pd.DataFrame, dict, str]:
     # Do not silently fall back to an older result if the selected newest archive is corrupt.
     path, meta = found[0]
     if (
-        meta.get("schema") != 1
+        meta.get("schema") != 2
         or meta.get("operation") != "forecast_exec"
         or meta.get("basis") != "standard"
         or meta.get("ess_capacity_payment") is not False
@@ -99,27 +142,34 @@ def load_archive(root: Path, row: pd.Series) -> tuple[pd.DataFrame, dict, str]:
         "planned_energy_end_mwh",
         "forecast_generation_mwh",
         "shortfall_mwh",
+        "fixed_plan_supply_mwh",
+        "fixed_plan_charge_mwh",
+        "fixed_plan_discharge_mwh",
+        "fixed_plan_energy_end_mwh",
+        "fixed_plan_soc_end",
+        "fixed_plan_shortfall_mwh",
+        "expected_plan_vpp_income_krw",
+        "fixed_plan_vpp_income_krw",
     }
     if needed - set(frame):
         raise ValueError("저장 결과에 확정 계획 비교 열이 없습니다.")
     if not np.isfinite(frame[list(needed)].to_numpy(float)).all():
         raise ValueError("확정 계획 비교 열에 결측이 있습니다.")
     annual = revenue_breakdown(row)
-    for column, key in (
-        ("vpp_ess_krw", "ess"),
-        ("vpp_solar_cp_krw", "solar_cp"),
-        ("vpp_penalty_krw", "penalty"),
-        ("vpp_income_krw", "total"),
-    ):
+    for column, key in (("vpp_ess_krw", "ess"), ("vpp_solar_cp_krw", "solar_cp"),
+                        ("vpp_penalty_krw", "penalty"), ("vpp_income_krw", "total")):
         if abs(float(frame[column].sum()) - annual[key]) > 0.04:
             raise ValueError("시간별 귀속 수입이 연간 보고값과 일치하지 않습니다.")
-    if not np.allclose(
-        frame.vpp_income_krw,
-        frame.vpp_ess_krw + frame.vpp_solar_cp_krw + frame.vpp_penalty_krw,
-        atol=1e-5,
-        rtol=0,
-    ):
-        raise ValueError("시간별 수입 합계가 구성 항목과 다릅니다.")
+    for prefix in ("expected_plan_vpp", "fixed_plan_vpp", "vpp"):
+        if not np.allclose(
+            frame[f"{prefix}_income_krw"],
+            frame[f"{prefix}_ess_krw"]
+            + frame[f"{prefix}_solar_cp_krw"]
+            + frame[f"{prefix}_penalty_krw"],
+            atol=1e-5,
+            rtol=0,
+        ):
+            raise ValueError(f"{prefix} 시간별 수입 합계가 구성 항목과 다릅니다.")
     return frame, meta, path.parent.name
 
 
@@ -159,23 +209,40 @@ def distribution_snapshot(root: Path, candidate: str, selected: date) -> dict:
                 "plannedSoc": float(r.planned_energy_end_mwh / row.ess_energy_mwh * 100),
                 "soc": float(r.soc_end * 100),
                 "shortfall": float(r.shortfall_mwh),
-                "plannedIncome": None,
+                "fixedSupply": float(r.fixed_plan_supply_mwh),
+                "fixedCharge": float(r.fixed_plan_charge_mwh),
+                "fixedDischarge": float(r.fixed_plan_discharge_mwh),
+                "fixedSoc": float(r.fixed_plan_soc_end * 100),
+                "fixedShortfall": float(r.fixed_plan_shortfall_mwh),
+                "plannedIncome": float(r.expected_plan_vpp_income_krw),
+                "fixedIncome": float(r.fixed_plan_vpp_income_krw),
                 "income": float(r.vpp_income_krw),
             }
         )
-    ledger = [
-        {"label": label, "planned": None, "actual": float(block[column].sum())}
-        for label, column in (
-            ("ESS 귀속 에너지 수입", "vpp_ess_krw"),
-            ("태양광 용량정산금 · 50%", "vpp_solar_cp_krw"),
-            ("임밸런스 페널티", "vpp_penalty_krw"),
+    ledger = []
+    for label, suffix in (
+        ("ESS 귀속 에너지 수입", "ess_krw"),
+        ("태양광 용량정산금 · 50%", "solar_cp_krw"),
+        ("임밸런스 페널티", "penalty_krw"),
+    ):
+        ledger.append(
+            {
+                "label": label,
+                "planned": float(block[f"expected_plan_vpp_{suffix}"].sum()),
+                "fixed": float(block[f"fixed_plan_vpp_{suffix}"].sum()),
+                "actual": float(block[f"vpp_{suffix}"].sum()),
+            }
         )
-    ]
     cutoff = pd.to_datetime(hourly.ts).dt.date.le(selected)
     monthly = hourly[cutoff].copy()
     monthly["month"] = pd.to_datetime(monthly.ts).dt.strftime("%Y-%m")
     trend = [
-        {"month": month, "planned": None, "actual": float(group.vpp_income_krw.sum())}
+        {
+            "month": month,
+            "planned": float(group.expected_plan_vpp_income_krw.sum()),
+            "fixed": float(group.fixed_plan_vpp_income_krw.sum()),
+            "actual": float(group.vpp_income_krw.sum()),
+        }
         for month, group in monthly.groupby("month", sort=True)
     ]
     return {
@@ -199,13 +266,17 @@ def distribution_snapshot(root: Path, candidate: str, selected: date) -> dict:
         "executionAvailable": True,
         "hours": hours,
         "ledger": ledger,
-        "plannedIncome": None,
+        "plannedIncome": float(block.expected_plan_vpp_income_krw.sum()),
+        "fixedPlanIncome": float(block.fixed_plan_vpp_income_krw.sum()),
         "actualIncome": float(block.vpp_income_krw.sum()),
+        "cumulativePlannedIncome": float(monthly.expected_plan_vpp_income_krw.sum()),
+        "cumulativeFixedIncome": float(monthly.fixed_plan_vpp_income_krw.sum()),
         "cumulativeIncome": float(monthly.vpp_income_krw.sum()),
         "trend": trend,
         "warnings": [
             "계산 당시 입력·코드로 만든 과거 결과입니다. 현재 코드로 재계산한 결과가 아닙니다.",
-            "계획의 VPP 귀속 수입은 저장되지 않아 금액 차이를 계산하지 않습니다.",
+            "고정계획 사후 수입은 계획 ESS 명령을 유지하고 "
+            "물리 한도 위반만 최소 보정한 비교값입니다.",
         ],
         "provenance": {
             "snapshot": archive_id,
@@ -251,6 +322,12 @@ def portfolio_snapshot(root: Path, selection: str, selected: date) -> dict:
                 "soc": a["soc"] if a else None,
                 "shortfall": a["shortfall"] if a else None,
                 "plannedIncome": number(point["profit"]),
+                "fixedSupply": None,
+                "fixedCharge": None,
+                "fixedDischarge": None,
+                "fixedSoc": None,
+                "fixedShortfall": None,
+                "fixedIncome": None,
                 "income": number(a["profit"]) if a else None,
             }
         )
@@ -268,12 +345,15 @@ def portfolio_snapshot(root: Path, selection: str, selected: date) -> dict:
         {
             "label": "판매 정산 · 편차 포함",
             "planned": rev["sales_revenue_krw"],
+            "fixed": None,
             "actual": None if sales is None or deviation is None else sales + deviation,
         },
-        {"label": "REC 수입", "planned": rev["rec_revenue_krw"], "actual": total("rec_krw")},
+        {"label": "REC 수입", "planned": rev["rec_revenue_krw"], "fixed": None,
+         "actual": total("rec_krw")},
         {
             "label": "열화비 차감",
             "planned": -rev["throughput_cost_krw"],
+            "fixed": None,
             "actual": -total("wear_krw") if total("wear_krw") is not None else None,
         },
     ]
@@ -290,6 +370,7 @@ def portfolio_snapshot(root: Path, selection: str, selected: date) -> dict:
             {
                 "month": month,
                 "planned": plan_revenue_breakdown(group, data["ess"])["net_revenue_krw"],
+                "fixed": None,
                 "actual": number(observed.realized_net_krw.sum()) if complete else None,
             }
         )
@@ -320,7 +401,10 @@ def portfolio_snapshot(root: Path, selection: str, selected: date) -> dict:
         "hours": hours,
         "ledger": ledger,
         "plannedIncome": number(rev["net_revenue_krw"]),
+        "fixedPlanIncome": None,
         "actualIncome": total("realized_net_krw"),
+        "cumulativePlannedIncome": sum(t["planned"] for t in trend),
+        "cumulativeFixedIncome": None,
         "cumulativeIncome": sum(t["actual"] for t in trend)
         if all(t["actual"] is not None for t in trend)
         else None,
@@ -379,7 +463,13 @@ def distribution_period(root: Path, candidate: str, start: date, end: date) -> d
                 "plannedSoc": float(g.planned_energy_end_mwh.iloc[-1] / capacity * 100),
                 "soc": float(g.soc_end.iloc[-1] * 100),
                 "shortfall": float(g.shortfall_mwh.sum()),
-                "plannedIncome": None,
+                "fixedSupply": float(g.fixed_plan_supply_mwh.sum()),
+                "fixedCharge": float(g.fixed_plan_charge_mwh.sum()),
+                "fixedDischarge": float(g.fixed_plan_discharge_mwh.sum()),
+                "fixedSoc": float(g.fixed_plan_soc_end.iloc[-1] * 100),
+                "fixedShortfall": float(g.fixed_plan_shortfall_mwh.sum()),
+                "plannedIncome": float(g.expected_plan_vpp_income_krw.sum()),
+                "fixedIncome": float(g.fixed_plan_vpp_income_krw.sum()),
                 "income": float(g.vpp_income_krw.sum()),
             }
         )
@@ -428,9 +518,15 @@ def portfolio_period(root: Path, selection: str, start: date, end: date) -> dict
                 "plannedSoc": number(g.soc_end.iloc[-1] * 100),
                 "soc": None,
                 "shortfall": None,
+                "fixedSupply": None,
+                "fixedCharge": None,
+                "fixedDischarge": None,
+                "fixedSoc": None,
+                "fixedShortfall": None,
                 "plannedIncome": number(
                     plan_revenue_breakdown(g, data["ess"])["net_revenue_krw"]
                 ),
+                "fixedIncome": None,
                 "income": number(ex.realized_net_krw.sum()) if complete else None,
             }
         )
@@ -495,6 +591,9 @@ def catalog():
                     "capacity": float(r.ess_energy_mwh),
                     "power": float(r.ess_power_mw),
                     "npv": number(r.npv_krw),
+                    "irr": number(r.irr),
+                    "discountedPaybackYears": number(r.discounted_payback_years),
+                    "neededAnnualSupport": number(r.needed_annual_support_krw),
                     "income": revenue_breakdown(r)["total"],
                     "hasArchive": ready,
                     "archiveIssue": archive_issue,
@@ -508,6 +607,29 @@ def catalog():
         "pipelineState": status.get("state", "not_run"),
         "warnings": warnings,
     }
+
+
+@router.get("/economics.pdf")
+def economics_pdf(selection: str = Query(min_length=1, max_length=180)):
+    """Download one candidate's saved summary and 20-year cashflow as a PDF."""
+    try:
+        candidate, summary, cashflow, capacity = economics_result(project_root(), selection)
+        content = build_economics_pdf(candidate, summary, cashflow, capacity)
+        filename = (
+            f"{candidate.line_case}_{candidate.battery}_"
+            f"{candidate.ess_power_mw:g}MW_{candidate.ess_energy_mwh:g}MWh_economics.pdf"
+        )
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(422, f"저장 결과 확인 필요: {exc}") from exc
 
 
 @router.get("/snapshot")

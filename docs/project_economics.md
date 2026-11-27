@@ -2,6 +2,8 @@
 
 배전망 ESS 공고 조건으로 "이 선로에 ESS를 넣고 참여할지"를 판단하는 20년 현금흐름 계산기다.
 운영 백테스트(48시간 롤링 MILP, 1년)가 내는 1년치 결과를 받아 투자비·지원금·유지비·교체비를 붙인다.
+현재 대시보드의 기준 결과는 2025년 1년 모의 실행·정산 수입을 연 0% 변화로 20년에 반복하고,
+운영비 상승과 설비 교체비를 별도로 반영한다. 장기 수입을 예측하거나 보장하는 값은 아니다.
 
 ```
 vpp.distribution_backtest (1년, 날마다 48시간 MILP)    설정 (config/project_economics_v0.yaml)
@@ -36,16 +38,18 @@ python -m vpp.distribution_backtest \
   1년 전체를 관측값으로 채웠다.
 - 태양광: `--generation` 의 포트폴리오 실측(18개소 14.08MW)을 5.7MW로 비례 환산한다
   (`distribution_scenario.scale_solar_to_capacity` 와 같은 비율). 발전량 예측이 없으면
-  `--solar <ts, solar_traded_mwh CSV>` 로 KPX 거래량 패턴을 쓸 수 있다 (이때 `forecast_exec` 없음).
-- 운전 방식 (`operation`)
+  `--solar <ts, solar_traded_mwh CSV>` 로 KPX 거래량 패턴을 쓸 수 있다
+  (이때 예측 계획·실측 실행 방식은 사용할 수 없음).
+- 운전 방식 (`operation`). 화면과 설명 문서에서는 쉬운 명칭을 먼저 사용하고, 괄호 안의 값은
+  CSV·CLI에서 사용하는 내부 식별자다.
 
-  | operation | 계획 | 실행·정산 |
-  | --- | --- | --- |
-  | `perfect` | 정답 SMP, 실측 발전량 | 계획 그대로, 실제 SMP |
-  | `forecast` | SMP v6 예측, 실측 발전량 | 계획 그대로, 실제 SMP |
-  | `forecast_exec` | SMP v6 예측, **발전량 예측** | 실측 발전량으로 실행 운전(`vpp.execution`) → 하루전·실시간 이중가격 + 임밸런스 페널티(`vpp.hourly_settlement`) |
+  | 사용자 명칭 | 내부 식별자 | 계획 | 실행·정산 |
+  | --- | --- | --- | --- |
+  | 완전예측 비교 | `perfect` | 정답 SMP, 실측 발전량 | 계획 그대로, 실제 SMP |
+  | 가격예측 계획 | `forecast` | SMP v6 예측, 실측 발전량 | 계획 그대로, 실제 SMP |
+  | 예측 계획·실측 실행 | `forecast_exec` | SMP v6 예측, **발전량 예측** | 실측 발전량으로 실행 운전(`vpp.execution`) → 하루전·실시간 이중가격 + 임밸런스 페널티(`vpp.hourly_settlement`) |
 
-  `forecast_exec` 가정: 실행 중 초과 판매 없음(남는 전력은 충전 또는 감축, 선로 상한 유지),
+  예측 계획·실측 실행(`forecast_exec`) 가정: 실행 중 초과 판매 없음(남는 전력은 충전 또는 감축, 선로 상한 유지),
   급전지시량 = 하루전 확정 판매량, 공급가능용량 = 확정 판매량(감발 지시 없음), 자원 설비용량 5.7MW.
   FCR 가격이 없는 시간은 있는 자료의 시간대별 평균으로 채운다. 결과 행에 `deviation_krw`(실시간 편차 정산),
   `shortfall_mwh`, `penalized_mwh`, `imbalance_penalty_krw` 가 붙는다.
@@ -84,7 +88,7 @@ python -m vpp.project_economics \
 | --- | --- |
 | `case` | 선로·사업 조건 이름 (예: `cap_1.50MW`) |
 | `battery` | 설정 파일 `batteries` 의 키. ESS 없는 기준선은 `none` |
-| `operation` | 운전 방식 (`forecast` = SMP v6 예측으로 계획, `perfect` = 정답 SMP) |
+| `operation` | 운전 방식 (`forecast_exec` = 예측 계획·실측 실행, `forecast` = 가격예측 계획, `perfect` = 완전예측 비교) |
 | `market_revenue_krw` | 1년 시장수익 = SMP+REC 판매 + 태양광 용량정산금 - 페널티. **열화비는 빼지 않는다**. ESS 용량정산금도 넣지 않는다 |
 | `solar_to_vpp_mwh` | VPP가 태양광에서 받은 전력량 = 바로 판매 + ESS 충전. PPA 지급 기준 |
 | `ess_charge_mwh`, `ess_discharge_mwh` | 1년 충방전량. 배터리 수명·교체 시점 계산에 쓴다 |
@@ -133,7 +137,7 @@ row = operating_row_from_hourly(
 | 금융 | 할인율 7%, 운영비 상승 2%/년 | 가정 |
 | 유지비 | O&M 2%/년, 보험·안전검사 0.5%/년 (초기 구축비 대비) | 가정 |
 | 교체 | 배터리: 수명 끝나는 해에 배터리 몫만 재구매 (단가 3%/년 하락). PCS: 15년, 구축비의 15% | 가정 (공고 예시 PCS 비중 14.5%) |
-| 수익 시나리오 | 1년차 시장수익 대비 연 -2% / 0% / +2% | 가정 |
+| 수익 변화율 | 전체 분석은 연 -2% / 0% / +2%를 지원하지만, 현재 대시보드·PDF는 기준값인 연 0%만 사용 | 가정 |
 | PPA | 0, 130, 150, 170원/kWh | 가정 |
 | 표준 수익 배분 | VPP 몫: ESS 용량정산금 100%, 태양광 용량정산금 50%, 태양광 에너지 0%, ESS 방전 100%, 페널티 100% | 2차 공고 신청서 작성 예시 (ESS 방전은 표에 없어 가정) |
 | ESS 용량정산금 | 넣은 경우·뺀 경우 둘 다 계산 | 2024.9 VPP 내 ESS 별도 인정안 부결, 2차 공고 예시에는 항목 있음 |
@@ -182,6 +186,8 @@ IRR은 NPV를 0으로 만드는 $r$. 손익분기 값은 다른 입력은 그대
 | `ess_capacity_payment` | ESS 용량정산금을 VPP 수익에 넣었는지 |
 | `revenue_scenario`, `ppa_krw_per_kwh` | 시나리오, PPA 단가 (`standard` 는 빈칸) |
 | `annual_market_revenue_krw`, `annual_solar_to_vpp_mwh` | 이 관점의 1년차 VPP 수익, PPA 기준 수전량 |
+| `revenue_reference_year`, `revenue_growth_rate` | 장기 현금흐름에 반복 적용한 기준연도와 연 수입 변화율 |
+| `discount_rate`, `cost_escalation`, `battery_price_decline` | 현재가치 할인율, 비용 상승률, 교체 배터리 가격 하락률 |
 | `solar_owner_gain_krw_per_year` | 태양광 소유자가 1년에 받는 돈 (`standard`: 배분 몫, 그 외: PPA x 수전량) |
 | `capex_krw`, `subsidy_krw` | 구축비, 지원금 |
 | `battery_life_years`, `battery_replacement_years` | 배터리 수명, 교체 연도 |
@@ -196,10 +202,30 @@ IRR은 NPV를 0으로 만드는 $r$. 손익분기 값은 다른 입력은 그대
 
 결과 해석은 [results/distribution_ess_economics_20261115.md](results/distribution_ess_economics_20261115.md).
 
+대시보드에서 사용하는 기준 시나리오의 NPV·IRR·할인 회수기간·필요 추가 보상액만 빠르게
+저장하려면 `--dashboard-only`를 사용한다. 이 명령은 기존 결과를 화면에서 다시 계산하지 않고
+조회·다운로드할 수 있도록 `economics_summary.csv`와 `economics_cashflow.csv`를 생성한다.
+
+```bash
+python -m vpp.project_economics --dashboard-only --config config/project_economics_v0.yaml --operating docs/results/distribution_ess_operating_20261115.csv --out-dir docs/results/economics_operating
+python -m vpp.project_economics --dashboard-only --config config/project_economics_v0.yaml --operating docs/results/distribution_ess_sizing_20261115.csv --out-dir docs/results/economics_sizing
+```
+
+React 대시보드의 `상세 경제성 파일 다운로드`는 위 저장 파일을 읽어 다음 네 페이지의 PDF를 만든다.
+요청 시 사업성을 다시 계산하거나 저장 결과를 변경하지 않는다.
+
+1. 분석 기준과 해석 범위
+2. 핵심 경제성 지표
+3. ESS 용량정산금 미포함·인정 가정 비교
+4. 기준 가정의 0~20년 연도별 현금흐름
+
+PDF에는 2025년 예측 판매계획을 실제 발전량·시장가격에 적용한 ESS 모의 실행·정산 결과가
+수입 기준임을 적는다. 내부 식별자 `forecast_exec`는 사용자용 PDF에 표시하지 않는다.
+
 ## 한계 (v0)
 
 - 한전이 주는 시간별 허용범위 대신 고정 상한(낮 8~18시)과 가정한 동적 상한을 쓴다.
-- 발전량 예측 오차와 페널티는 `forecast_exec` 에만 있다. 실행 규칙은 판매 약속 우선 규칙
+- 발전량 예측 오차와 페널티는 예측 계획·실측 실행(`forecast_exec`)에만 있다. 실행 규칙은 판매 약속 우선 규칙
   (`vpp.execution.RuleBasedPolicy`)이라 수익 최적 운전이 아니다.
 - 급전지시량·공급가능용량은 실제 급전 기록이 없어 확정 판매량으로 가정했다. 감발 지시(1.5% 허용오차)
   상황은 실시간 가격이 0 이하인 시간에만 생긴다.

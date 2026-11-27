@@ -1,7 +1,7 @@
 import { useReducer, useState } from "react";
-import { ArrowLeft, ArrowUpRight } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Download } from "lucide-react";
 import type { Catalog, Candidate } from "../types";
-import { lineLabel, money, number } from "../lib/format";
+import { lineLabel, money, number, percent, years } from "../lib/format";
 import { SectionTitle } from "../components/Shared";
 import { Help, Term } from "../components/Help";
 import { comparisonReducer } from "../lib/comparison";
@@ -311,6 +311,25 @@ function CandidateComparison({
       label: "20년 NPV",
       value: (c: Candidate) => (c.npv === null ? "보고값 없음" : money(c.npv)),
     },
+    { label: "IRR", value: (c: Candidate) => percent(c.irr) },
+    {
+      label: "할인 투자비 회수기간",
+      value: (c: Candidate) =>
+        c.discountedPaybackYears !== null
+          ? years(c.discountedPaybackYears)
+          : c.npv !== null && c.npv <= 0
+            ? "20년 내 회수 불가"
+            : "보고값 없음",
+    },
+    {
+      label: "필요한 연간 추가 보상액",
+      value: (c: Candidate) =>
+        c.neededAnnualSupport === null
+          ? "보고값 없음"
+          : c.neededAnnualSupport === 0
+            ? "필요 없음"
+            : money(c.neededAnnualSupport),
+    },
     {
       label: "운영 시뮬레이션",
       value: (c: Candidate) =>
@@ -397,6 +416,7 @@ function CandidateReview({
 }) {
   const review = useReview(`resource:${candidate.id}`);
   const [memo, setMemo] = useState(review.value.memo);
+  const economicsQuery = encodeURIComponent(candidate.id);
   return (
     <>
       <SectionTitle
@@ -407,6 +427,16 @@ function CandidateReview({
         }
         aside={candidate.label}
       />
+      <div className="economics-detail-action">
+        <a
+          className="button subtle"
+          href={`/api/v1/dashboard/economics.pdf?selection=${economicsQuery}`}
+          download
+        >
+          <Download size={15} />
+          상세 경제성 파일 다운로드
+        </a>
+      </div>
       <label className="form-label" htmlFor="resource-memo">
         {onboarding ? "선택 이유 · 검토 의견 (선택)" : "재점검 의견"}
       </label>

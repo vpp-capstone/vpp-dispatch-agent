@@ -66,7 +66,7 @@ python -m vpp.operator_pipeline
   `docs/results/distribution_ess_operating_20261115.csv`와 용량 비교 CSV의 운영 수치를
   그대로 표시하며, NPV·보상 필요액은 같은 날짜의 사업성 결과 보고서에 기록된 값만 표시한다.
   보고서에 없는 조합은 `결과 없음`/`판단 보류`이며 계산·보간하지 않는다. 기준 시나리오,
-  표준 수익 배분(`standard`), 발전량 예측 → 실행 → 정산(`forecast_exec`), ESS 용량정산금 제외 기준이다. 필터·설비 선택은 화면에만
+  표준 수익 배분(`standard`), 예측 계획·실측 실행(내부 식별자 `forecast_exec`), ESS 용량정산금 제외 기준이다. 필터·설비 선택은 화면에만
   적용되며 기존 운영 설정·파이프라인·현재 포트폴리오를 바꾸지 않는다.
   **운영과 수익**은 선택한 설비의 연간 VPP 귀속 수입(ESS 방전 정산 수입 + 태양광 용량정산금 50%
   - 임밸런스 페널티)을 합산해 구성 항목과 보고된 20년 NPV를 함께 표시한다. 편차 정산은 에너지
@@ -80,6 +80,9 @@ python -m vpp.operator_pipeline
   대조한 결과만 저장·표시한다. 불일치·결측·SOC 단절은 차단하며 가상 운전이나 연간 값 분할로 대체하지 않는다.
   계산 결과는 `data/processed/distribution_replay/`에 저장된다. 입력·설정·계산 코드·설비가 바뀌면
   별도 결과로 구분하며, 날짜 변경과 재생만으로 MILP를 다시 풀지 않는다. 시간별 CSV 다운로드도 제공한다.
+  React 설비 비교 화면에서는 NPV·IRR·할인 회수기간·필요 연간 추가 보상액을 함께 비교하고,
+  최종 후보의 분석 기준·손익분기 조건·교체 시점·0~20년 현금흐름·ESS 용량정산금 인정 여부 비교를
+  `상세 경제성 파일 다운로드`로 받는다. PDF와 화면은 저장 결과만 읽으며 요청 시 재계산하지 않는다.
 
   입력 경로는 `config/distribution_replay.yaml`에 모았다. 발전량은
   `artifacts/2025/evaluation/solar_improved_2025_with_actual.parquet`, 시장 실측은

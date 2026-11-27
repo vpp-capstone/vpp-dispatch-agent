@@ -9,6 +9,7 @@ business:
   ess_energy_mwh: 20.0
   solar_mw: 5.7                # 선로당 모집해야 하는 접속대기 재생에너지
   project_years: 20            # 배터리 보증 수명 연한(20년)까지 사업 지속 의무
+  revenue_reference_year: 2025 # 장기 현금흐름의 기준이 되는 1년 모의 운영 자료
   subsidy_rate: 0.5            # 총사업비(AI 활용 시스템 포함 ESS 구축비)의 50% 이내
   subsidy_cap_krw_per_mwh: 586000000   # ESS 정격 방전용량(MWh)당 최대 5.86억원
   fixed_income: none           # 고정수익 없음: 재생에너지 입찰시장 정산금, PPA 운영관리 수수료 등

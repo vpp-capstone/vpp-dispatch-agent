@@ -16,6 +16,10 @@ RESULTS = "docs/results"
 OPERATING = "distribution_ess_operating_20261115.csv"
 SIZING = "distribution_ess_sizing_20261115.csv"
 REPORT = "distribution_ess_economics_20261115.md"
+ECONOMICS_SUMMARIES = (
+    "docs/results/economics_operating/economics_summary.csv",
+    "docs/results/economics_sizing/economics_summary.csv",
+)
 BATTERIES = {
     "kr_notice_example": "국내 구축비 예시",
     "new_2021_pnnl": "신품 · PNNL 2021",
@@ -28,6 +32,7 @@ REPORT_COLUMNS = (
     "new_2025_ember", "second_life_example",
 )
 IDENTITY = ["line_case", "battery", "ess_power_mw", "ess_energy_mwh"]
+ECONOMIC_FIELDS = ("irr", "discounted_payback_years", "needed_annual_support_krw")
 
 
 def line_label(line: str) -> str:
@@ -122,6 +127,49 @@ def report_values(text: str) -> dict[tuple, dict]:
     return values
 
 
+def economics_values(root: Path) -> dict[tuple, dict]:
+    """Read exact saved metrics without calculating or interpolating them in the UI."""
+    values: dict[tuple, dict] = {}
+    required = {
+        "case", "battery", "operation", "basis", "ess_capacity_payment",
+        "revenue_scenario", "ess_power_mw", "ess_energy_mwh", *ECONOMIC_FIELDS,
+    }
+    for relative in ECONOMICS_SUMMARIES:
+        path = root / relative
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path)
+        if missing := required - set(frame):
+            raise ValueError(f"{path.name}: 경제성 표시 열이 없습니다: {sorted(missing)}")
+        cp = frame["ess_capacity_payment"].astype(str).str.lower().map(
+            {"true": True, "false": False}
+        )
+        selected = frame[
+            frame.operation.eq("forecast_exec")
+            & frame.basis.eq("standard")
+            & frame.revenue_scenario.eq("base")
+            & cp.eq(False)
+        ].copy()
+        selected["line_case"] = selected["case"].str.replace(
+            r"_ess[\d.]+MW[\d.]+MWh$", "", regex=True
+        )
+        source_file = OPERATING if "economics_operating" in relative else SIZING
+        for row in selected.itertuples(index=False):
+            key = (source_file, row.line_case, row.battery,
+                   float(row.ess_power_mw), float(row.ess_energy_mwh))
+            record = values.setdefault(key, {})
+            for field in ECONOMIC_FIELDS:
+                value = getattr(row, field)
+                if pd.isna(value):
+                    continue
+                value = float(value)
+                if field in record and record[field] != value:
+                    raise ValueError("경제성 요약에 같은 조합의 값이 서로 다릅니다.")
+                record[field] = value
+            record["economics_source"] = str(path.relative_to(root)).replace("\\", "/")
+    return values
+
+
 def load_display(root: Path) -> tuple[pd.DataFrame, str]:
     """Read the two existing result CSVs; selection has no write-back path."""
     base = root / RESULTS
@@ -153,9 +201,17 @@ def load_display(root: Path) -> tuple[pd.DataFrame, str]:
         raise ValueError("표시할 선로 조건이 없거나 선로 표기가 맞지 않습니다.")
     report = (base / REPORT).read_text(encoding="utf-8") if (base / REPORT).exists() else ""
     points = report_values(report)
+    metrics = economics_values(root)
     rows["id"] = rows.apply(lambda r: f"{r.line_case}|{r.battery}|{r.ess_power_mw:g}:{r.ess_energy_mwh:g}", axis=1)
     for field in ("npv_krw", "needed_annual_support_krw", "npv_source"):
         rows[field] = [points.get(tuple(row), {}).get(field) for row in rows[IDENTITY].itertuples(index=False, name=None)]
+    for field in (*ECONOMIC_FIELDS, "economics_source"):
+        calculated = [metrics.get(tuple(row), {}).get(field)
+                      for row in rows[["source_file", *IDENTITY]].itertuples(index=False, name=None)]
+        if field == "needed_annual_support_krw":
+            rows[field] = rows[field].where(rows[field].notna(), calculated)
+        else:
+            rows[field] = calculated
     rows["equipment"] = rows.apply(equipment_label, axis=1)
     return rows, report
 

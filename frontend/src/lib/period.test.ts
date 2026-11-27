@@ -17,7 +17,13 @@ const day = (
   plannedSoc: 50,
   soc: 40,
   shortfall: 0.5,
+  fixedSupply: 9,
+  fixedCharge: 1.8,
+  fixedDischarge: 1,
+  fixedSoc: 45,
+  fixedShortfall: 0.4,
   plannedIncome: planned,
+  fixedIncome: income === null ? null : income - 5,
   income,
 });
 
@@ -35,6 +41,9 @@ describe("period replay totals", () => {
       charge: 3,
       discharge: 2,
       shortfall: 1,
+      plannedIncome: null,
+      fixedIncome: 290,
+      executedIncome: 300,
     });
     expect(cumulative(days, -1).days).toBe(0);
     expect(cumulative(days, 99).income).toBe(600);

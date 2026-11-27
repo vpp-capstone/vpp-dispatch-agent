@@ -12,7 +12,8 @@ export function Settlement({
   setHour: (h: number) => void;
   navigate: (p: Page) => void;
 }) {
-  const delta = difference(data.actualIncome, data.plannedIncome);
+  const forecastImpact = difference(data.fixedPlanIncome, data.plannedIncome);
+  const adjustmentImpact = difference(data.actualIncome, data.fixedPlanIncome);
   const issues = [...data.hours]
     .filter((h) => (h.shortfall ?? 0) > 0.001)
     .sort((a, b) => b.shortfall! - a.shortfall!)
@@ -30,11 +31,22 @@ export function Settlement({
       </p>
       <Stats
         items={[
-          { label: "계획 기준", value: money(data.plannedIncome) },
-          { label: "실행 기준", value: money(data.actualIncome) },
+          { label: "예상 계획", value: money(data.plannedIncome), tone: "plan" },
           {
-            label: "실행 − 계획",
-            value: delta === null ? "비교값 미저장" : money(delta),
+            label: "고정계획 사후",
+            value: money(data.fixedPlanIncome),
+            tone: "counterfactual",
+          },
+          { label: "실행 기준", value: money(data.actualIncome), tone: "primary" },
+          {
+            label: "발전량·가격 예측 오차 영향",
+            value: forecastImpact === null ? "비교값 미저장" : money(forecastImpact),
+            tone: (forecastImpact ?? 0) < 0 ? "loss" : "gain",
+          },
+          {
+            label: "ESS 실행 조정 효과",
+            value: adjustmentImpact === null ? "비교값 미저장" : money(adjustmentImpact),
+            tone: (adjustmentImpact ?? 0) < 0 ? "loss" : "gain",
           },
         ]}
       />
@@ -48,8 +60,10 @@ export function Settlement({
             <tr>
               <th>정산 항목</th>
               <th>계획</th>
+              <th>고정계획 사후</th>
               <th>실행</th>
-              <th>차이</th>
+              <th>예측 오차 영향</th>
+              <th>실행 조정 효과</th>
             </tr>
           </thead>
           <tbody>
@@ -59,10 +73,12 @@ export function Settlement({
                   <Term label={row.label} />
                 </td>
                 <td>{money(row.planned)}</td>
+                <td>{money(row.fixed)}</td>
                 <td className={(row.actual ?? 0) < 0 ? "negative" : ""}>
                   {money(row.actual)}
                 </td>
-                <td>{money(difference(row.actual, row.planned))}</td>
+                <td>{money(difference(row.fixed, row.planned))}</td>
+                <td>{money(difference(row.actual, row.fixed))}</td>
               </tr>
             ))}
             <tr className="total">
@@ -70,8 +86,10 @@ export function Settlement({
                 <Term label={data.incomeLabel} />
               </td>
               <td>{money(data.plannedIncome)}</td>
+              <td>{money(data.fixedPlanIncome)}</td>
               <td>{money(data.actualIncome)}</td>
-              <td>{money(delta)}</td>
+              <td>{money(forecastImpact)}</td>
+              <td>{money(adjustmentImpact)}</td>
             </tr>
           </tbody>
         </table>
@@ -111,8 +129,10 @@ export function Settlement({
             <tr>
               <th>기간</th>
               <th>계획 합계</th>
+              <th>고정계획 사후</th>
               <th>실행 합계</th>
-              <th>차이</th>
+              <th>예측 오차 영향</th>
+              <th>실행 조정 효과</th>
             </tr>
           </thead>
           <tbody>
@@ -125,8 +145,10 @@ export function Settlement({
                     : ""}
                 </td>
                 <td>{money(r.planned)}</td>
+                <td>{money(r.fixed)}</td>
                 <td>{money(r.actual)}</td>
-                <td>{money(difference(r.actual, r.planned))}</td>
+                <td>{money(difference(r.fixed, r.planned))}</td>
+                <td>{money(difference(r.actual, r.fixed))}</td>
               </tr>
             ))}
           </tbody>

@@ -49,6 +49,21 @@ DISPLAY = (
     "vpp_ess_krw",
     "vpp_solar_cp_krw",
     "vpp_penalty_krw",
+    "expected_plan_vpp_income_krw",
+    "expected_plan_vpp_ess_krw",
+    "expected_plan_vpp_solar_cp_krw",
+    "expected_plan_vpp_penalty_krw",
+    "fixed_plan_vpp_income_krw",
+    "fixed_plan_vpp_ess_krw",
+    "fixed_plan_vpp_solar_cp_krw",
+    "fixed_plan_vpp_penalty_krw",
+    "fixed_plan_supply_mwh",
+    "fixed_plan_charge_mwh",
+    "fixed_plan_discharge_mwh",
+    "fixed_plan_energy_start_mwh",
+    "fixed_plan_energy_end_mwh",
+    "fixed_plan_soc_end",
+    "fixed_plan_shortfall_mwh",
 )
 
 
@@ -58,7 +73,7 @@ def _sha(path: Path) -> str:
 
 def sources(root: Path) -> dict:
     config = root / "config/distribution_replay.yaml"
-    raw = yaml.safe_load(config.read_text())
+    raw = yaml.safe_load(config.read_text(encoding="utf-8"))
     paths = {
         k: root / raw[k] for k in ("generation", "forecast", "market", "rec", "ess", "economics")
     }
@@ -67,7 +82,7 @@ def sources(root: Path) -> dict:
     missing = [str(p) for p in all_paths if not p.is_file()]
     if missing:
         raise FileNotFoundError("필요한 입력 파일: " + ", ".join(missing))
-    rec = yaml.safe_load(paths["rec"].read_text())
+    rec = yaml.safe_load(paths["rec"].read_text(encoding="utf-8"))
     if rec.get("price_table"):
         # Same resolution used by RecParams.from_yaml.
         table = Path(rec["price_table"])
@@ -85,7 +100,7 @@ def context(root: Path, row: pd.Series) -> dict:
     paths += list((root / "src/vpp").glob("*.py"))
     paths += [Path(__file__)]
     return {
-        "schema": 1,
+        "schema": 2,
         "candidate": str(row.id),
         "operation": db.EXEC,
         "basis": "standard",
@@ -132,24 +147,21 @@ def validate_hours(hourly: pd.DataFrame, capacity: float, expected=YEAR) -> None
         or not np.allclose(hourly.soc_end, end / capacity, atol=1e-6, rtol=0)
     ):
         raise ValueError("배터리 잔량 또는 시간 간 SOC 연결을 확인하세요.")
+    fixed_start = hourly.fixed_plan_energy_start_mwh.to_numpy(float)
+    fixed_end = hourly.fixed_plan_energy_end_mwh.to_numpy(float)
+    if (
+        np.any(fixed_start < -1e-6)
+        or np.any(fixed_end < -1e-6)
+        or np.any(fixed_start > capacity + 1e-6)
+        or np.any(fixed_end > capacity + 1e-6)
+        or not np.allclose(fixed_end[:-1], fixed_start[1:], atol=1e-6, rtol=0)
+        or not np.allclose(hourly.fixed_plan_soc_end, fixed_end / capacity, atol=1e-6, rtol=0)
+    ):
+        raise ValueError("고정계획 사후 실행의 SOC 연결을 확인하세요.")
 
 
-def execute(inputs, cfg, base, case, battery, days):
-    """Call existing calculation functions unchanged, including standard allocation."""
-    ess = db.ess_for(base, cfg, cfg.batteries[battery], case)
-    hourly = db.run_case(inputs, cfg, base, case, battery, db.EXEC, days)
-    settled = db.settle_exec(hourly, ess, inputs.solar_capacity_mw)
-    if settled.imbalance_penalty_krw.isna().any():
-        raise ValueError("예비력 가격이 없어 페널티 정산을 완료할 수 없습니다.")
-    kw = dict(
-        case=case.name,
-        battery=battery,
-        operation=db.EXEC,
-        solar_capacity_credit_mw=inputs.solar_capacity_mw * db.SOLAR_EFCR,
-        ess_capacity_credit_mw=case.ess_power_mw * db.ESS_EFCR,
-        rcp_krw_per_kwh_h=db.JEJU_RCP_KRW_PER_KWH_H,
-    )
-    annual = db.operating_row_from_settlement(settled, **kw)
+def standard_income(cfg, settled: pd.DataFrame, kw: dict) -> pd.DataFrame:
+    """Apply the same saved-report allocation to one settlement scenario, hourly."""
     components = pd.DataFrame(
         [
             db.operating_row_from_settlement(settled.iloc[i : i + 1], **kw)
@@ -157,7 +169,6 @@ def execute(inputs, cfg, base, case, battery, days):
         ]
     )
     sh = cfg.standard_vpp_shares
-    # The published screen's standard basis must not silently change with config edits.
     if any(
         sh.get(k, 0) != v
         for k, v in {
@@ -168,15 +179,56 @@ def execute(inputs, cfg, base, case, battery, days):
         }.items()
     ):
         raise ValueError("수익 배분 설정이 보고서의 standard 기준과 다릅니다.")
-    hourly["vpp_income_krw"] = [
-        pe._standard_view(cfg, r, r.ess_charge_mwh + r.ess_discharge_mwh).op.market_revenue_krw
-        for _, r in components.iterrows()
-    ]
-    hourly["vpp_ess_krw"] = components.ess_discharge_revenue_krw * sh["ess_energy"]
-    hourly["vpp_solar_cp_krw"] = (
-        components.solar_capacity_payment_krw * sh["solar_capacity_payment"]
+    return pd.DataFrame(
+        {
+            "income": [
+                pe._standard_view(
+                    cfg, r, r.ess_charge_mwh + r.ess_discharge_mwh
+                ).op.market_revenue_krw
+                for _, r in components.iterrows()
+            ],
+            "ess": components.ess_discharge_revenue_krw * sh["ess_energy"],
+            "solar_cp": (
+                components.solar_capacity_payment_krw * sh["solar_capacity_payment"]
+            ),
+            "penalty": -components.imbalance_penalty_krw * sh["imbalance_penalty"],
+        }
     )
-    hourly["vpp_penalty_krw"] = -components.imbalance_penalty_krw * sh["imbalance_penalty"]
+
+
+def execute(inputs, cfg, base, case, battery, days):
+    """Call existing calculation functions unchanged, including standard allocation."""
+    ess = db.ess_for(base, cfg, cfg.batteries[battery], case)
+    hourly = db.run_case(inputs, cfg, base, case, battery, db.EXEC, days)
+    scenarios = {
+        name: db.settle_exec(
+            db.income_scenario_hourly(hourly, name), ess, inputs.solar_capacity_mw
+        )
+        for name in ("expected_plan", "fixed_plan", "executed")
+    }
+    if any(s.imbalance_penalty_krw.isna().any() for s in scenarios.values()):
+        raise ValueError("예비력 가격이 없어 페널티 정산을 완료할 수 없습니다.")
+    kw = dict(
+        case=case.name,
+        battery=battery,
+        operation=db.EXEC,
+        solar_capacity_credit_mw=inputs.solar_capacity_mw * db.SOLAR_EFCR,
+        ess_capacity_credit_mw=case.ess_power_mw * db.ESS_EFCR,
+        rcp_krw_per_kwh_h=db.JEJU_RCP_KRW_PER_KWH_H,
+    )
+    settled = scenarios["executed"]
+    annual = db.operating_row_from_settlement(settled, **kw)
+    allocated = {name: standard_income(cfg, value, kw) for name, value in scenarios.items()}
+    for scenario, prefix in (
+        ("expected_plan", "expected_plan_vpp"),
+        ("fixed_plan", "fixed_plan_vpp"),
+        ("executed", "vpp"),
+    ):
+        values = allocated[scenario]
+        hourly[f"{prefix}_income_krw"] = values.income.to_numpy()
+        hourly[f"{prefix}_ess_krw"] = values.ess.to_numpy()
+        hourly[f"{prefix}_solar_cp_krw"] = values.solar_cp.to_numpy()
+        hourly[f"{prefix}_penalty_krw"] = values.penalty.to_numpy()
     for col in ("energy_revenue_krw", "rec_krw", "deviation_krw", "imbalance_penalty_krw"):
         hourly[col] = settled[col].to_numpy()
     expected = pd.date_range(days[0], periods=len(days) * 24, freq="h")
@@ -242,7 +294,7 @@ def load(root: Path, row: pd.Series) -> tuple[pd.DataFrame, dict] | None:
     path = folder / "manifest.json"
     if not path.exists():
         return None
-    meta = json.loads(path.read_text())
+    meta = json.loads(path.read_text(encoding="utf-8"))
     if any(meta.get(k) != v for k, v in stamp.items()):
         raise ValueError("선택한 설비와 시간별 결과의 기준이 다릅니다.")
     file = folder / Path(meta["file"]).name

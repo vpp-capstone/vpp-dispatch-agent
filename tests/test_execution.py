@@ -82,6 +82,20 @@ def test_extra_discharge_can_be_disabled_by_policy():
     assert res["discharge_mwh"] == 0 and res["shortfall_mwh"] == pytest.approx(5)
 
 
+def test_fixed_plan_counterfactual_only_applies_physical_corrections():
+    policy = ex.RuleBasedPolicy(extra_discharge=False, surplus_order=("curtail",))
+    p = plan(sell=[7, 5], charge=[3, 0], discharge=[0, 3], gen=[10, 2])
+    h = run(p, [4, 6], policy).hourly
+    # 부족 시 실제 발전량으로 불가능한 계획 충전만 줄이고 추가 방전하지 않는다.
+    assert h.loc[0, "charge_mwh"] == 0
+    assert h.loc[0, "discharge_mwh"] == 0
+    assert h.loc[0, "shortfall_mwh"] == pytest.approx(3)
+    # 잉여 시 계획 방전을 줄이거나 초과 판매하지 않고 잉여만 감축한다.
+    assert h.loc[1, "discharge_mwh"] == pytest.approx(3)
+    assert h.loc[1, "supply_mwh"] == pytest.approx(5)
+    assert h.loc[1, "curtailment_mwh"] == pytest.approx(4)
+
+
 def test_surplus_default_reduces_discharge_then_sells_and_charges_only_unsellable():
     # 계획: 발전 2 + 방전 3 = 판매 5. 실측 6 → 잉여 4: 방전 3 줄이고 1 은 초과 판매 (충전 아님).
     p = plan(sell=[5], discharge=[3], gen=[2])

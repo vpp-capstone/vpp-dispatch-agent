@@ -5,11 +5,15 @@ from shutil import copyfile
 
 import pandas as pd
 import pytest
-from streamlit.testing.v1 import AppTest
-
 from dashboard.distribution_display import (
-    OPERATING, RESULTS, SIZING, load_display, selected_id, visible_candidates,
+    OPERATING,
+    RESULTS,
+    SIZING,
+    load_display,
+    selected_id,
+    visible_candidates,
 )
+from streamlit.testing.v1 import AppTest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,7 +32,12 @@ def test_reported_values_and_unreported_combinations():
     dynamic = indexed.loc["dyn_1.00MW|second_life_example|4:20"]
     assert dynamic.npv_krw == 2.5e8
     assert dynamic.npv_source == "결과 보고서 §5 · 소수 1자리 억원"
-    assert pd.isna(small.needed_annual_support_krw)
+    assert small.needed_annual_support_krw > 0
+    assert pd.notna(small.irr)
+    profitable = indexed.loc["cap_2.50MW|new_2025_bnef|2:8"]
+    assert profitable.irr > 0
+    assert 0 < profitable.discounted_payback_years < 20
+    assert profitable.needed_annual_support_krw == 0
     assert pd.isna(indexed.loc["cap_1.75MW|new_2025_bnef|4:20"].npv_krw)
     # Forecast-only sizing rows must not be substituted for execution results.
     assert "cap_2.50MW|kr_notice_example|3:15" not in indexed.index
@@ -57,6 +66,8 @@ def test_missing_report_keeps_operating_rows_without_inventing_economics(tmp_pat
     assert len(rows) == 135
     assert rows.npv_krw.isna().all()
     assert rows.needed_annual_support_krw.isna().all()
+    assert rows.irr.isna().all()
+    assert rows.discounted_payback_years.isna().all()
 
 
 def test_empty_filter_never_reuses_a_different_equipment():

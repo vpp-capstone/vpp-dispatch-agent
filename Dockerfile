@@ -11,7 +11,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     VPP_PROJECT_ROOT=/app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
+    && apt-get install -y --no-install-recommends libgomp1 fonts-nanum \
     && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
