@@ -1,12 +1,14 @@
-# 제주 VPP 발전량·SMP 예측 기반 ESS 운영계획
+# 제주 VPP 예측 기반 배전망 ESS 운영·사업성 분석
 
 제주 VPP 중개사업자 입장에서, 입찰 마감인 **D-1 11시**에 알 수 있는 기상예보·시장자료만으로
 **다음 48시간의 태양광·풍력 발전량과 제주 하루전 SMP를 1시간 단위로 예측**하고,
-그 예측으로 ESS 충·방전 계획을 세운 뒤 실측으로 결과를 평가한다.
+그 예측으로 ESS 충·방전 계획을 세운 뒤 실측으로 결과를 평가한다. 배전망 선로 조건과
+설비 비용을 결합해 사업 참여 여부, 적정 ESS 후보와 20년 경제성도 함께 검토한다.
 
 - 발전량: 한수원 태양광 18개소 + 풍력 3개 단지(성산·한경·상명)의 가상 포트폴리오. 제주 전체가 아니다.
-- 현재 단계: 발전량·SMP 예측을 ESS v0에 연결해 계획을 만들고, 확정 판매계획을 유지한 채
-  실측 발전량에 맞춘 ESS 실행 운전과 실험 가정 기반 정산까지 비교한다.
+- 현재 단계: 발전량·SMP 예측을 ESS 운영계획과 실행·정산에 연결하고, 배전망 선로·ESS 후보별
+  20년 사업성을 비교한다. React 대시보드에서는 저장·검산된 결과만 조회하며 새 예측이나
+  설비 제어를 실행하지 않는다.
 - 초기 기획의 **24시간 수요예측**(`data.py`, `forecast.py`)은 자리만 있고 구현되지 않았다. 유지 여부는 팀 합의 필요.
 
 ## 모듈 현황
@@ -20,7 +22,8 @@
 | SMP 예측 48h           | `smp_forecast.py`                                                                      | 구현 (PR #5)                                                                  | [smp_forecast.md](docs/smp_forecast.md)                                                           |
 | 수요예측 24h           | `data.py`, `forecast.py`                                                               | 미구현 (`NotImplementedError` 자리만)                                         | —                                                                                                 |
 | 실행·정산              | `execution.py`, `execution_rolling.py`, `settlement.py`                                | 구현. 판매계획 고정 실행 운전과 실험 가정 기반 편차 정산                     | [실행·정산](docs/execution_settlement.md) · [대시보드](docs/operator_dashboard.md)                 |
-| 파이프라인·API·화면    | `operator_pipeline.py`, `dashboard/app.py`, `pipeline.py`, `api/main.py`                | 운영 파이프라인·대시보드는 구현. 범용 `pipeline.py`와 day-ahead API는 뼈대    | [operator_dashboard.md](docs/operator_dashboard.md)                                               |
+| 배전망 ESS 사업성      | `distribution_backtest.py`, `project_economics.py`, `distribution_replay.py`           | 구현. 선로·설비 후보별 운영 결과, 20년 현금흐름, 참여 판단                    | [project_economics.md](docs/project_economics.md)                                                 |
+| 파이프라인·API·화면    | `operator_pipeline.py`, `dashboard/app.py`, `api/main.py`, `api/dashboard.py`, `frontend/` | Streamlit 자동 계산 화면과 React·FastAPI 저장 결과 조회 화면 구현           | [운영 대시보드](docs/operator_dashboard.md) · [React 대시보드](docs/react_dashboard.md)            |
 | 공통 타입              | `schemas.py`                                                                           | 초안. 최적화·평가 타입은 `status`, `reason`만 있는 빈 틀                      | —                                                                                                 |
 
 - 공통 타입·함수 인자·데이터 형식은 바꾸기 전에 쓰는 사람과 합의.
@@ -39,6 +42,7 @@ data/raw/generation/ ─► vpp.generation_forecast ─► 발전량 예측 48h 
 2. 같은 계획일 D의 두 예측 48시간을 ESS에 넣어 앞 24시간 계획 확정, SOC 이월
 3. 같은 기간 실측 기반 완전예측 계획과 비교
 4. 확정 판매계획을 실측에 적용해 ESS 실행 운전·편차 정산·실현 수익 계산
+5. 2025년 모의 실행·정산 결과를 기준으로 설비 후보별 20년 현금흐름과 참여 조건 계산
 
 ## 데이터 준비 (설치 전에)
 
@@ -98,7 +102,9 @@ docker compose up
 ```
 
 접속: **http://localhost:8000/dashboard/**. 첫 실행은 이미지 다운로드·빌드가 필요합니다.
-기존 결과는 읽기 전용으로 연결합니다. 코드 수정 후에는 `docker compose up --build`를 사용합니다.
+기존 결과는 읽기 전용으로 연결합니다. 설비 비교 화면에서 NPV·IRR·회수기간을 비교하고,
+선택한 후보의 20년 현금흐름과 ESS 용량정산금 인정 여부 비교를 한글 PDF로 내려받을 수 있습니다.
+코드 수정 후에는 `docker compose up --build`를 사용합니다.
 공유할 파일 목록과 종료 방법은 [Docker 실행 안내](docs/react_dashboard.md#docker로-실행)를 참고하세요.
 
 운영자 화면과 로컬 모델 자동 실행은 [운영 대시보드 안내](docs/operator_dashboard.md)를 참고하세요.
@@ -183,6 +189,8 @@ src/vpp/
   optimization.py            ESS 운영계획
   validation.py              ESS 계획 제약 검증
   evaluation.py              예측 오차·운영비용 평가
+  distribution_backtest.py  배전망 선로·ESS 후보별 1년 운영 백테스트
+  project_economics.py       2025년 운영 결과 기반 20년 사업성 계산
   pipeline.py                모듈 연결 및 CLI
 
 scripts/weather/
@@ -200,6 +208,7 @@ data/
     forecast/                SMP 예측 결과 (vpp.smp_forecast), Git 제외
     generation_forecast/     정제 발전량·학습마트·모델 지표, Git 제외
     backtest/                ESS 백테스트 실행 결과, Git 제외
+    distribution_replay/     검산된 배전망 ESS 시간별 재생 아카이브, Git 제외
   sample/                    화면·재현 확인용 소형 샘플
 
 artifacts/
@@ -228,9 +237,17 @@ docs/
   GITHUB_REPO_HANDOFF.md      발전량 예측 코드 이전 인수인계
   generation_forecast_results.md  발전량 모델 2024 결합 학습·2025 최종 테스트 결과
   smp_weather_features.md     SMP 전달용 제주 기상 피처 계약·생성 방법
+  project_economics.md        배전망 ESS 20년 현금흐름·사업성 계산
+  react_dashboard.md          React·FastAPI 조회 화면과 Docker 실행 방법
+  results/
+    economics_operating/      운영 후보 경제성 요약·20년 현금흐름
+    economics_sizing/         용량 비교 후보 경제성 요약·20년 현금흐름
 
 api/main.py                  FastAPI 진입점
-dashboard/app.py             Streamlit 대시보드
+api/dashboard.py             React 화면용 저장 결과 조회·경제성 PDF API
+api/economics_pdf.py         한글 상세 경제성 PDF 생성
+dashboard/app.py             Streamlit 자동 계산·검산 대시보드
+frontend/                    React·TypeScript 운영·사업성 조회 화면
 tests/                       모듈별 단위·통합 테스트
 .github/                     이슈·PR 템플릿 및 pytest CI
 pyproject.toml               패키지·의존성·pytest·ruff 설정

@@ -114,7 +114,9 @@ def test_catalog_demo_readiness_requires_validation_without_removing_candidates(
 ):
     rows = pd.DataFrame([
         {"id": name, "equipment": name, "line_case": "cap_2.50MW",
-         "ess_energy_mwh": 8, "ess_power_mw": 2, "npv_krw": 100}
+         "ess_energy_mwh": 8, "ess_power_mw": 2, "npv_krw": 100,
+         "irr": 0.1, "discounted_payback_years": 9.5,
+         "needed_annual_support_krw": 0}
         for name in ("ready", "invalid", "missing")
     ])
     monkeypatch.setenv("VPP_PROJECT_ROOT", str(tmp_path))
@@ -143,8 +145,25 @@ def test_catalog_demo_readiness_requires_validation_without_removing_candidates(
     assert candidates["invalid"]["hasArchive"] is False
     assert "용량" in candidates["invalid"]["archiveIssue"]
     assert candidates["invalid"]["income"] == 200
+    assert candidates["ready"]["irr"] == 0.1
+    assert candidates["ready"]["discountedPaybackYears"] == 9.5
+    assert candidates["ready"]["neededAnnualSupport"] == 0
     assert candidates["missing"]["hasArchive"] is False
     assert candidates["missing"]["archiveIssue"] is None
+
+
+def test_saved_economics_pdf_download(client):
+    selection = "cap_2.50MW|new_2025_bnef|2:8"
+    _, base, _, capacity = adapter.economics_result(adapter.project_root(), selection)
+    assert capacity is not None
+    assert capacity.annual_ess_capacity_payment_krw > 0
+    assert capacity.npv_krw > base.npv_krw
+    download = client.get("/api/v1/dashboard/economics.pdf", params={"selection": selection})
+    assert download.status_code == 200, download.text
+    assert download.content.startswith(b"%PDF-")
+    assert download.headers["content-type"] == "application/pdf"
+    assert "attachment" in download.headers["content-disposition"]
+    assert download.headers["content-disposition"].endswith('.pdf"')
 
 
 def test_distribution_snapshot_keeps_missing_plan_income_and_exact_receipt_sum(

@@ -20,8 +20,9 @@ from dashboard.distribution_display import load_display
 from dashboard.distribution_operation import revenue_breakdown
 from dashboard.operator_simulation import replay_payload
 from dashboard.overview_data import load_experiment
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
+from api.economics_pdf import build_economics_pdf
 from dashboard import distribution_replay as replay
 from vpp.baselines import plan_revenue_breakdown
 from vpp.project_paths import resolve_project_path
@@ -39,6 +40,48 @@ def read_json(path: Path) -> dict:
 
 def number(value):
     return float(value) if value is not None and pd.notna(value) and np.isfinite(value) else None
+
+
+def economics_result(
+    root: Path, selection: str
+) -> tuple[pd.Series, pd.Series, pd.DataFrame, pd.Series | None]:
+    """Load one candidate's saved summary and annual cashflow without recalculation."""
+    rows, _ = load_display(root)
+    matched = rows[rows.id.eq(selection)]
+    if matched.empty:
+        raise LookupError("경제성 후보를 찾을 수 없습니다.")
+    candidate = matched.iloc[0]
+    folder = "economics_operating" if "operating" in candidate.source_file else "economics_sizing"
+    summary_path = within(root, root / "docs/results" / folder / "economics_summary.csv")
+    cashflow_path = within(root, root / "docs/results" / folder / "economics_cashflow.csv")
+    if not summary_path.exists() or not cashflow_path.exists():
+        raise FileNotFoundError("상세 경제성 결과 파일을 먼저 생성해야 합니다.")
+    summary = pd.read_csv(summary_path)
+    cashflows = pd.read_csv(cashflow_path)
+    common = (
+        summary["case"].eq(candidate["case"])
+        & summary["battery"].eq(candidate.battery)
+        & summary["operation"].eq("forecast_exec")
+        & summary["basis"].eq("standard")
+        & summary["revenue_scenario"].eq("base")
+        & summary["ess_power_mw"].eq(candidate.ess_power_mw)
+        & summary["ess_energy_mwh"].eq(candidate.ess_energy_mwh)
+    )
+    summary_cp = summary["ess_capacity_payment"].astype(str).str.lower().eq("true")
+    summary_match = summary[common & ~summary_cp]
+    capacity_match = summary[common & summary_cp]
+    flow_cp = cashflows["ess_capacity_payment"].astype(str).str.lower().eq("true")
+    flow_match = cashflows[
+        cashflows["case"].eq(candidate["case"])
+        & cashflows["battery"].eq(candidate.battery)
+        & cashflows["ess_power_mw"].eq(candidate.ess_power_mw)
+        & cashflows["ess_energy_mwh"].eq(candidate.ess_energy_mwh)
+        & ~flow_cp
+    ].copy()
+    if len(summary_match) != 1 or len(capacity_match) > 1 or flow_match.empty:
+        raise ValueError("선택 후보와 일치하는 상세 경제성 결과가 없습니다.")
+    capacity = capacity_match.iloc[0] if len(capacity_match) == 1 else None
+    return candidate, summary_match.iloc[0], flow_match.sort_values("year"), capacity
 
 
 def within(root: Path, path: Path) -> Path:
@@ -548,6 +591,9 @@ def catalog():
                     "capacity": float(r.ess_energy_mwh),
                     "power": float(r.ess_power_mw),
                     "npv": number(r.npv_krw),
+                    "irr": number(r.irr),
+                    "discountedPaybackYears": number(r.discounted_payback_years),
+                    "neededAnnualSupport": number(r.needed_annual_support_krw),
                     "income": revenue_breakdown(r)["total"],
                     "hasArchive": ready,
                     "archiveIssue": archive_issue,
@@ -561,6 +607,29 @@ def catalog():
         "pipelineState": status.get("state", "not_run"),
         "warnings": warnings,
     }
+
+
+@router.get("/economics.pdf")
+def economics_pdf(selection: str = Query(min_length=1, max_length=180)):
+    """Download one candidate's saved summary and 20-year cashflow as a PDF."""
+    try:
+        candidate, summary, cashflow, capacity = economics_result(project_root(), selection)
+        content = build_economics_pdf(candidate, summary, cashflow, capacity)
+        filename = (
+            f"{candidate.line_case}_{candidate.battery}_"
+            f"{candidate.ess_power_mw:g}MW_{candidate.ess_energy_mwh:g}MWh_economics.pdf"
+        )
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(422, f"저장 결과 확인 필요: {exc}") from exc
 
 
 @router.get("/snapshot")

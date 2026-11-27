@@ -14,6 +14,9 @@ export interface Candidate {
   capacity: number;
   power: number;
   npv: Nullable;
+  irr: Nullable;
+  discountedPaybackYears: Nullable;
+  neededAnnualSupport: Nullable;
   income: number;
   hasArchive: boolean;
   archiveIssue?: string | null;

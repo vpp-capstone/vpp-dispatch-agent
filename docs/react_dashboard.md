@@ -25,7 +25,7 @@ Docker Desktop의 `8000:8000` 링크나 `http://localhost:8000/`로 열어도
 |---|---|
 | `data/processed/distribution_replay/` | 시연할 설비의 결과 폴더 전체: `manifest.json`과 그 파일이 가리키는 시간별 Parquet. 파일명·해시를 보존한다. |
 | `data/processed/operator_pipeline/` | 포트폴리오 조회 시 `status.json`과 그 결과의 `backtests/` 폴더. 기존 계산 환경까지 공유하려면 `plans/`, `snapshots/`, `releases/`도 포함한다. |
-| `docs/results/` | `distribution_ess_operating_20261115.csv`, `distribution_ess_sizing_20261115.csv`, `distribution_ess_economics_20261115.md` |
+| `docs/results/` | 운영·용량 비교 CSV와 경제성 보고서, `economics_operating/`·`economics_sizing/`의 `economics_summary.csv`와 `economics_cashflow.csv` |
 | `artifacts/`, 나머지 `data/` | 팀이 공유한 기존 예측·시장 자료를 같은 하위 폴더에 둔다. React 저장 결과 조회에는 모델 재학습이 필요하지 않다. |
 | `config/` | 저장소의 설정 파일. Compose가 같은 위치를 연결한다. |
 
@@ -39,6 +39,13 @@ Git에 없는 데이터·결과 CSV·Parquet은 팀 Drive에서 별도로 받아
 Compose는 호스트의 위 폴더를 컨테이너의 `/app/` 아래에 읽기 전용으로 연결한다.
 프로젝트 전체를 `/app`에 덮어 마운트하지 않아 이미지의 `frontend/dist`가 가려지지 않는다.
 종료·재생성해도 공유 데이터가 유지되며 API는 학습·최적화·파일 변경을 하지 않는다.
+
+경제성 요약이 없으면 기존 운영 결과에서 조회용 기준 시나리오 지표만 생성한다.
+
+```bash
+python -m vpp.project_economics --dashboard-only --config config/project_economics_v0.yaml --operating docs/results/distribution_ess_operating_20261115.csv --out-dir docs/results/economics_operating
+python -m vpp.project_economics --dashboard-only --config config/project_economics_v0.yaml --operating docs/results/distribution_ess_sizing_20261115.csv --out-dir docs/results/economics_sizing
+```
 
 - 종료: 실행 터미널에서 `Ctrl+C`, 또는 다른 터미널에서 `docker compose down`.
 - 백그라운드 실행: `docker compose up -d`; 로그: `docker compose logs -f dashboard`.
@@ -79,7 +86,8 @@ python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 
 - 첫 방문은 `처음 오셨나요? → 설비·사업성 검토 → 선택안 확정 → 운영계획`으로 시작한다. 별도 화면을 중복 구현하지 않고 기존 설비 비교 화면을 신규 고객 모드로 재사용한다.
 - 기본 목록은 `운영 시연 가능`이다. 신규 고객은 고정 상한 2.50 MW의 국내 구축비 예시/BNEF 2025, 2 MW / 8 MWh 두 후보가 비교 대상으로 펼쳐지며 최종 선택은 비워둔다. `전체 후보`에서 기존 후보를 모두 확인할 수 있고, `기본 시연 비교`로 기본 선로·후보 비교를 다시 불러온다. 필터에 숨겨진 후보는 비교·최종 선택에서도 해제한다.
-- 설비 목록 맨 왼쪽에서 최대 2개 후보를 체크하고, 아래 비교표에서 출력·용량·연간 수입·NPV·운영 결과 연결 여부를 비교한 다음 최종 대상 하나를 선택한다. 선로 변경 시 비교와 최종 선택을 초기화한다. 시간별 결과가 없는 후보도 검토할 수 있지만 운영계획 이동 버튼은 비활성화하며 버튼 바로 위에 이유와 다음 행동을 안내한다.
+- 설비 목록 맨 왼쪽에서 최대 2개 후보를 체크하고, 아래 비교표에서 출력·용량·연간 수입·NPV·IRR·할인 회수기간·필요 연간 추가 보상액·운영 결과 연결 여부를 비교한 다음 최종 대상 하나를 선택한다. 선로 변경 시 비교와 최종 선택을 초기화한다. 시간별 결과가 없는 후보도 검토할 수 있지만 운영계획 이동 버튼은 비활성화하며 버튼 바로 위에 이유와 다음 행동을 안내한다.
+- 최종 후보의 `상세 경제성 파일 다운로드` 버튼으로 한글 PDF를 내려받을 수 있다. PDF는 페이지별로 ① 분석 기준과 해석 범위, ② 핵심 경제성 지표, ③ ESS 용량정산금 미포함·인정 가정 비교, ④ 기준 가정의 0~20년 현금흐름을 싣는다. 미포함 결과를 참여 판단의 기준으로 사용하고, 인정 가정은 제도상 인정될 경우의 잠재적 개선 효과로 구분한다. 다운로드 API는 저장된 경제성 결과만 읽으며 요청 시 재계산하지 않는다.
 - `이 설비로 운영계획 시작`으로 선택한 후보·기준일을 이 브라우저에 기억한다. 다음에 기본 주소로 방문하면 같은 후보의 운영계획을 연다. 직접 `#/welcome`으로 이동하면 첫 안내를 다시 볼 수 있다.
 - 실제 계정·로그인·서버 저장은 추가하지 않았다. 저장된 선택이 없는 경우 `기존 고객으로 시연하기`는 예시 설비로 진입한다. localStorage가 차단되어도 현재 세션은 계속 사용할 수 있고 재방문 시 복원할 수 없음을 안내한다.
 - 운영 현황 → 같은 시간 운영계획 검토 → 결과 재생 → 실적·정산이 동일한 설비·날짜·결과 ID를 사용한다.
@@ -117,12 +125,19 @@ python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 - 고정계획 사후 수입: 실제 발전량·실제 SMP를 적용하되 ESS 추가 대응 없이 물리 한도만 보정한 값
 - 실행 수입: 실제 발전량에 맞춘 저장 실행 정책과 모의 편차 정산을 적용한 값
 
+사업성 결과는 2025년 1년간의 예측 판매계획·실측 실행·모의 정산 결과를 365일 기준으로
+연간화한 뒤, 같은 연 수입이 20년 동안 유지된다고 가정한다. 운영비는 매년 상승하고 배터리·PCS
+교체비는 설정된 시점에 반영한다. 따라서 NPV·IRR은 실제 장기 수입 예측이나 보장값이 아니라
+동일한 가정에서 설비 후보를 비교하기 위한 값이다. 실제 참여 전에는 한전 선로 허용범위,
+설비 견적, 계약상 수익 배분과 ESS 용량정산금 인정 여부를 다시 확인해야 한다.
+
 새 예측·재최적화, 실제 설비 제어, 실시간 정산 시연은 포함하지 않는다.
 
 ## API와 검증
 
 - `GET /api/v1/dashboard/catalog`: 포트폴리오 결과 묶음, 설비 후보, 저장 결과의 검증 통과 여부. `hasArchive`는 파일 존재만으로 참이 되지 않으며 기존 `load_archive` 검증을 통과해야 한다. 파일이 있어도 검증에 실패하면 `archiveIssue`에 이유를 담고 전체 후보에 유지한다.
 - `GET /api/v1/dashboard/snapshot?source=distribution&selection=...&day=2025-05-01`: 하루 계획·실행·수입과 선택일까지의 누적 값.
+- `GET /api/v1/dashboard/economics.pdf?selection=...`: 선택 후보의 저장된 경제성 요약·현금흐름을 한글 PDF로 반환한다.
 - `source=portfolio`의 selection은 파이프라인 status.json에 기록된 release ID다.
 
 포트폴리오는 기존 `load_experiment`, `replay_payload`, `plan_revenue_breakdown`을 사용한다.

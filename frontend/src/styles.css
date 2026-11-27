@@ -1099,6 +1099,11 @@ textarea {
   border-left: 3px solid #d9b475;
   padding-left: 12px;
 }
+.economics-detail-action {
+  display: flex;
+  justify-content: flex-end;
+  margin: -8px 0 18px;
+}
 @media (max-width: 760px) {
   .candidate-comparison th,
   .candidate-comparison td {

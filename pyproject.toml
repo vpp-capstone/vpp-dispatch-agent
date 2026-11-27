@@ -26,6 +26,7 @@ dependencies = [
     "holidays>=0.50",
     "streamlit>=1.36",
     "plotly>=5.22",
+    "reportlab>=4.2",
 ]
 
 [project.optional-dependencies]
